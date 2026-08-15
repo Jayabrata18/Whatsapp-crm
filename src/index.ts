@@ -4,10 +4,13 @@ import { createApp } from './server.js';
 import { createSheetsApi, GoogleSheetStore } from './adapters/googleSheetStore.js';
 import { GraphWhatsAppClient } from './adapters/whatsapp.js';
 import { CashfreeClient } from './adapters/cashfree.js';
+import { ShopifyAdminClient } from './adapters/shopifyAdmin.js';
 import { OrderIntakeService } from './services/orderIntake.js';
 import { ConfirmationService } from './services/confirmation.js';
+import { PaymentService } from './services/payment.js';
 import { createShopifyRouter } from './routes/shopify.js';
 import { createMetaRouter } from './routes/meta.js';
+import { createCashfreeRouter } from './routes/cashfree.js';
 
 const config = loadConfig(process.env);
 
@@ -40,6 +43,13 @@ const confirmation = new ConfirmationService({
   linkExpiryHours: 24,
 });
 
+const tagger = new ShopifyAdminClient({
+  storeDomain: config.shopifyStoreDomain,
+  adminToken: config.shopifyAdminToken,
+});
+
+const payment = new PaymentService({ store, tagger });
+
 const app = createApp({
   routers: [
     createShopifyRouter({ intake, webhookSecret: config.shopifyWebhookSecret }),
@@ -48,6 +58,7 @@ const app = createApp({
       appSecret: config.metaAppSecret,
       verifyToken: config.metaVerifyToken,
     }),
+    createCashfreeRouter({ payment, secretKey: config.cashfreeSecretKey }),
   ],
 });
 
