@@ -3,8 +3,11 @@ import { log } from './logger.js';
 import { createApp } from './server.js';
 import { createSheetsApi, GoogleSheetStore } from './adapters/googleSheetStore.js';
 import { GraphWhatsAppClient } from './adapters/whatsapp.js';
+import { CashfreeClient } from './adapters/cashfree.js';
 import { OrderIntakeService } from './services/orderIntake.js';
+import { ConfirmationService } from './services/confirmation.js';
 import { createShopifyRouter } from './routes/shopify.js';
+import { createMetaRouter } from './routes/meta.js';
 
 const config = loadConfig(process.env);
 
@@ -23,8 +26,29 @@ const intake = new OrderIntakeService({
   templateLang: config.templateLang,
 });
 
+const payments = new CashfreeClient({
+  appId: config.cashfreeAppId,
+  secretKey: config.cashfreeSecretKey,
+  env: config.cashfreeEnv,
+});
+
+const confirmation = new ConfirmationService({
+  store,
+  whatsapp,
+  payments,
+  templateLang: config.templateLang,
+  linkExpiryHours: 24,
+});
+
 const app = createApp({
-  routers: [createShopifyRouter({ intake, webhookSecret: config.shopifyWebhookSecret })],
+  routers: [
+    createShopifyRouter({ intake, webhookSecret: config.shopifyWebhookSecret }),
+    createMetaRouter({
+      confirmation,
+      appSecret: config.metaAppSecret,
+      verifyToken: config.metaVerifyToken,
+    }),
+  ],
 });
 
 app.listen(config.port, () => {
