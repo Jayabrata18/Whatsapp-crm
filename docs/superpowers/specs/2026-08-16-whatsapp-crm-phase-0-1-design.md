@@ -132,7 +132,7 @@ PENDING ──"I Confirm"──→ CONFIRMED ──payment success──→ PAID
 
 Transitions are guarded: a service only advances a status from its expected predecessor. A late duplicate "I Confirm" on an already-`PAID_EARLY` order is a no-op, not a downgrade.
 
-`NO_RESPONSE` is written by a sweep that is **not** implemented in Phase 1 — the status exists in the enum and renders in the dashboard so Phase 3's cron can set it without a schema change.
+`NO_RESPONSE` has exactly one writer in Phase 1: an order that arrives with no usable phone number, which can never receive a message and so starts terminal. The *sweep* that ages out stale `PENDING` orders is **not** implemented here — it belongs with Phase 3's cron, and the status already exists so adding it later needs no schema change.
 
 ---
 
