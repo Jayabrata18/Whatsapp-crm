@@ -11,6 +11,8 @@ import { PaymentService } from './services/payment.js';
 import { createShopifyRouter } from './routes/shopify.js';
 import { createMetaRouter } from './routes/meta.js';
 import { createCashfreeRouter } from './routes/cashfree.js';
+import { createApiRouter } from './routes/api.js';
+import { createDashboardRouter } from './routes/dashboard.js';
 
 const config = loadConfig(process.env);
 
@@ -59,6 +61,8 @@ const app = createApp({
       verifyToken: config.metaVerifyToken,
     }),
     createCashfreeRouter({ payment, secretKey: config.cashfreeSecretKey }),
+    createApiRouter({ store, dashboardToken: config.dashboardToken }),
+    createDashboardRouter(),
   ],
 });
 
