@@ -5,7 +5,7 @@ import {
   valuesToOrderRow,
 } from '../../src/adapters/googleSheetStore.js';
 import type { SheetsApi } from '../../src/adapters/googleSheetStore.js';
-import type { OrderRow } from '../../src/adapters/sheets.js';
+import { ORDER_HEADERS, type OrderRow } from '../../src/adapters/sheets.js';
 
 function order(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -30,20 +30,33 @@ class FakeSheetsApi implements SheetsApi {
   tabs: Record<string, unknown[][]> = { orders: [], messages: [], events: [] };
   appended: Array<{ range: string; values: unknown[][] }> = [];
   updated: Array<{ range: string; values: unknown[][] }> = [];
+  batchUpdated: Array<{ range: string; values: unknown[][]; raw?: boolean }> = [];
 
   async getValues(_sheetId: string, range: string): Promise<unknown[][]> {
     const tab = range.split('!')[0]!;
     return this.tabs[tab] ?? [];
   }
 
-  async appendValues(_sheetId: string, range: string, values: unknown[][]): Promise<void> {
+  async appendValues(
+    _sheetId: string,
+    range: string,
+    values: unknown[][],
+  ): Promise<{ updatedRange: string }> {
     const tab = range.split('!')[0]!;
     this.tabs[tab] = [...(this.tabs[tab] ?? []), ...values];
     this.appended.push({ range, values });
+    return { updatedRange: range };
   }
 
   async updateValues(_sheetId: string, range: string, values: unknown[][]): Promise<void> {
     this.updated.push({ range, values });
+  }
+
+  async batchUpdateValues(
+    _sheetId: string,
+    data: Array<{ range: string; values: unknown[][]; raw?: boolean }>,
+  ): Promise<void> {
+    this.batchUpdated.push(...data);
   }
 }
 
@@ -142,19 +155,18 @@ describe('GoogleSheetStore', () => {
       orderRowToValues(order()),
     ];
     const store = new GoogleSheetStore(api, 'sheet123');
-    await store.updateOrder('#1042', { confirmStatus: 'CONFIRMED' });
+    await store.updateOrderFields('#1042', { confirmStatus: 'CONFIRMED' });
     // header is row 1, #1001 is row 2, #1042 is row 3
-    expect(api.updated[0]?.range).toBe('orders!A3:M3');
-    expect(api.updated[0]?.values[0]?.[8]).toBe('CONFIRMED');
+    expect(api.batchUpdated).toEqual([{ range: 'orders!I3:I3', values: [['CONFIRMED']] }]);
   });
 
   it('does nothing when updating an unknown order', async () => {
     const api = new FakeSheetsApi();
     api.tabs.orders = [['header']];
-    await new GoogleSheetStore(api, 'sheet123').updateOrder('#9999', {
+    await new GoogleSheetStore(api, 'sheet123').updateOrderFields('#9999', {
       confirmStatus: 'CONFIRMED',
     });
-    expect(api.updated).toHaveLength(0);
+    expect(api.batchUpdated).toHaveLength(0);
   });
 
   it('records and detects events', async () => {
@@ -202,5 +214,35 @@ describe('GoogleSheetStore', () => {
     api.tabs.messages = [['header']];
     await new GoogleSheetStore(api, 'sheet123').updateMessageStatus('wamid.NOPE', 'read');
     expect(api.updated).toHaveLength(0);
+  });
+
+  it('writes only the columns named in the patch', async () => {
+    const writes: Array<{ range: string; values: unknown[][] }> = [];
+    const api: SheetsApi = {
+      async getValues() {
+        return [
+          [...ORDER_HEADERS],
+          ['#1042', '99', 'Aarav', '919876543210', 1899, 50, 1849,
+           'TRUE', 'PENDING', '', '2026-09-01T00:00:00.000Z', '', ''],
+        ];
+      },
+      async appendValues() { return { updatedRange: 'orders!A2:S2' }; },
+      async updateValues() { throw new Error('updateValues must not be used'); },
+      async batchUpdateValues(_id, data) { writes.push(...data.map((d) => ({ range: d.range, values: d.values }))); },
+    };
+    const store = new GoogleSheetStore(api, 'sheet-1');
+
+    await store.updateOrderFields('#1042', { confirmStatus: 'CONFIRMED', confirmedAt: '2026-09-02T00:00:00.000Z' });
+
+    expect(writes).toEqual([
+      { range: 'orders!I2:I2', values: [['CONFIRMED']] },
+      { range: 'orders!L2:L2', values: [['2026-09-02T00:00:00.000Z']] },
+    ]);
+  });
+
+  it('has no method capable of writing a whole order row', () => {
+    expect(
+      (GoogleSheetStore.prototype as unknown as Record<string, unknown>).updateOrder,
+    ).toBeUndefined();
   });
 });

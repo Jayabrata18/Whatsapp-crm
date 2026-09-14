@@ -82,12 +82,12 @@ export class ConfirmationService {
     });
 
     if (isCancel) {
-      await store.updateOrder(order.orderNo, { confirmStatus: 'CANCELLED' });
+      await store.updateOrderFields(order.orderNo, { confirmStatus: 'CANCELLED' });
       log('info', 'order cancelled by customer', { order_no: order.orderNo });
       return 'cancelled';
     }
 
-    await store.updateOrder(order.orderNo, {
+    await store.updateOrderFields(order.orderNo, {
       confirmStatus: 'CONFIRMED',
       confirmedAt: timestamp,
     });
@@ -105,7 +105,7 @@ export class ConfirmationService {
       expiryHours: this.deps.linkExpiryHours,
     });
 
-    await store.updateOrder(order.orderNo, { paymentLink: link.linkUrl });
+    await store.updateOrderFields(order.orderNo, { paymentLink: link.linkUrl });
 
     const { wamid } = await this.deps.whatsapp.sendTemplate({
       to: order.phone,

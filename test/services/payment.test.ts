@@ -93,7 +93,7 @@ describe('PaymentService', () => {
   });
 
   it('does not downgrade an order that is already PAID_EARLY', async () => {
-    await ctx.store.updateOrder('#1042', { confirmStatus: 'PAID_EARLY', paidAt: 'earlier' });
+    await ctx.store.updateOrderFields('#1042', { confirmStatus: 'PAID_EARLY', paidAt: 'earlier' });
     // A different Cashfree order id, so this is not caught by the event ledger.
     const result = await ctx.service.handle(successPayload('urbnmyth-1042', 'cf-order-100'));
     expect(result).toBe('duplicate');

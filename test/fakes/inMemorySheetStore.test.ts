@@ -38,7 +38,7 @@ describe('InMemorySheetStore', () => {
   it('patches an order without disturbing other fields', async () => {
     const store = new InMemorySheetStore();
     await store.appendOrder(order());
-    await store.updateOrder('#1042', { confirmStatus: 'CONFIRMED', confirmedAt: 'now' });
+    await store.updateOrderFields('#1042', { confirmStatus: 'CONFIRMED', confirmedAt: 'now' });
     const updated = await store.findOrderByNo('#1042');
     expect(updated?.confirmStatus).toBe('CONFIRMED');
     expect(updated?.confirmedAt).toBe('now');

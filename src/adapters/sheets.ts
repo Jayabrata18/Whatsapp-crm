@@ -33,13 +33,22 @@ export interface SheetStore {
   findOrderByNo(orderNo: string): Promise<OrderRow | null>;
   /** Most recently created order for this phone in PENDING status, or null. */
   findLatestPendingByPhone(phone: string): Promise<OrderRow | null>;
-  updateOrder(orderNo: string, patch: Partial<OrderRow>): Promise<void>;
+  /** Writes ONLY the columns named in `patch`. There is deliberately no whole-row write. */
+  updateOrderFields(orderNo: string, patch: Partial<OrderRow>): Promise<void>;
   appendMessage(row: MessageRow): Promise<void>;
   updateMessageStatus(wamid: string, status: string): Promise<void>;
   /** True when this exact event was already processed. */
   hasEvent(source: EventSource, externalId: string): Promise<boolean>;
   recordEvent(source: EventSource, externalId: string): Promise<void>;
 }
+
+/** Field → column letter. The single source of truth for where each field lives. */
+export const ORDER_COLUMNS: Record<keyof OrderRow, string> = {
+  orderNo: 'A', orderId: 'B', customerName: 'C', phone: 'D',
+  amount: 'E', codFee: 'F', payable: 'G', isCod: 'H',
+  confirmStatus: 'I', paymentLink: 'J', createdAt: 'K',
+  confirmedAt: 'L', paidAt: 'M',
+};
 
 export const ORDER_HEADERS = [
   'order_no',

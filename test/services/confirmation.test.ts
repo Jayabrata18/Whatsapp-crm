@@ -125,7 +125,7 @@ describe('ConfirmationService', () => {
   });
 
   it('does not downgrade an order that is already PAID_EARLY', async () => {
-    await ctx.store.updateOrder('#1042', { confirmStatus: 'PAID_EARLY' });
+    await ctx.store.updateOrderFields('#1042', { confirmStatus: 'PAID_EARLY' });
     const late: MetaEvent = { ...confirmEvent, messageId: 'wamid.LATE' };
     expect(await ctx.service.handleEvent(late)).toBe('no_match');
     expect((await ctx.store.findOrderByNo('#1042'))?.confirmStatus).toBe('PAID_EARLY');

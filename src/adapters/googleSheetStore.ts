@@ -1,5 +1,11 @@
 import { google } from 'googleapis';
-import type { EventSource, MessageRow, OrderRow, SheetStore } from './sheets.js';
+import {
+  ORDER_COLUMNS,
+  type EventSource,
+  type MessageRow,
+  type OrderRow,
+  type SheetStore,
+} from './sheets.js';
 
 /**
  * The narrow slice of the Sheets API this adapter needs. Hand-rolled rather
@@ -8,8 +14,12 @@ import type { EventSource, MessageRow, OrderRow, SheetStore } from './sheets.js'
  */
 export interface SheetsApi {
   getValues(sheetId: string, range: string): Promise<unknown[][]>;
-  appendValues(sheetId: string, range: string, values: unknown[][]): Promise<void>;
+  appendValues(sheetId: string, range: string, values: unknown[][]): Promise<{ updatedRange: string }>;
   updateValues(sheetId: string, range: string, values: unknown[][]): Promise<void>;
+  batchUpdateValues(
+    sheetId: string,
+    data: Array<{ range: string; values: unknown[][]; raw?: boolean }>,
+  ): Promise<void>;
 }
 
 const ORDERS_RANGE = 'orders!A:M';
@@ -101,13 +111,27 @@ export class GoogleSheetStore implements SheetStore {
     return matches.at(-1) ?? null;
   }
 
-  async updateOrder(orderNo: string, patch: Partial<OrderRow>): Promise<void> {
+  async updateOrderFields(orderNo: string, patch: Partial<OrderRow>): Promise<void> {
     const entry = (await this.orderRowsWithIndex()).find((e) => e.row.orderNo === orderNo);
     if (!entry) return;
-    const merged = { ...entry.row, ...patch };
-    await this.api.updateValues(this.sheetId, `orders!A${entry.sheetRow}:M${entry.sheetRow}`, [
-      orderRowToValues(merged),
-    ]);
+
+    const data = (Object.keys(patch) as Array<keyof OrderRow>)
+      .filter((field) => patch[field] !== undefined)
+      .map((field) => {
+        const col = ORDER_COLUMNS[field];
+        const raw = patch[field];
+        const value = typeof raw === 'boolean' ? (raw ? 'TRUE' : 'FALSE') : raw;
+        return {
+          range: `orders!${col}${entry.sheetRow}:${col}${entry.sheetRow}`,
+          values: [[value as string | number]],
+        };
+      });
+
+    if (data.length > 0) await this.batchWrite(data);
+  }
+
+  private async batchWrite(data: Array<{ range: string; values: unknown[][]; raw?: boolean }>) {
+    await this.api.batchUpdateValues(this.sheetId, data);
   }
 
   async appendMessage(row: MessageRow): Promise<void> {
@@ -155,13 +179,14 @@ export async function createSheetsApi(): Promise<SheetsApi> {
       return res.data.values ?? [];
     },
     async appendValues(sheetId, range, values) {
-      await sheets.spreadsheets.values.append({
+      const res = await sheets.spreadsheets.values.append({
         spreadsheetId: sheetId,
         range,
         valueInputOption: 'RAW',
         insertDataOption: 'INSERT_ROWS',
         requestBody: { values: values as unknown[][] },
       });
+      return { updatedRange: res.data.updates?.updatedRange ?? '' };
     },
     async updateValues(sheetId, range, values) {
       await sheets.spreadsheets.values.update({
@@ -170,6 +195,25 @@ export async function createSheetsApi(): Promise<SheetsApi> {
         valueInputOption: 'RAW',
         requestBody: { values: values as unknown[][] },
       });
+    },
+    async batchUpdateValues(sheetId, data) {
+      // Split by valueInputOption: formulas must be USER_ENTERED, everything else RAW.
+      // `raw: false` means "this is a formula". It reads oddly, but inverting it would
+      // make RAW the opt-in and every existing caller would have to change.
+      const groups: Array<['RAW' | 'USER_ENTERED', typeof data]> = [
+        ['RAW', data.filter((d) => d.raw !== false)],
+        ['USER_ENTERED', data.filter((d) => d.raw === false)],
+      ];
+      for (const [valueInputOption, group] of groups) {
+        if (group.length === 0) continue;
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: sheetId,
+          requestBody: {
+            valueInputOption,
+            data: group.map((d) => ({ range: d.range, values: d.values as unknown[][] })),
+          },
+        });
+      }
     },
   };
 }

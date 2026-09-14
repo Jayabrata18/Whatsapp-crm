@@ -31,7 +31,7 @@ export class InMemorySheetStore implements SheetStore {
     return latest ? { ...latest } : null;
   }
 
-  async updateOrder(orderNo: string, patch: Partial<OrderRow>): Promise<void> {
+  async updateOrderFields(orderNo: string, patch: Partial<OrderRow>): Promise<void> {
     const index = this.orders.findIndex((row) => row.orderNo === orderNo);
     if (index === -1) return;
     this.orders[index] = { ...this.orders[index]!, ...patch };
