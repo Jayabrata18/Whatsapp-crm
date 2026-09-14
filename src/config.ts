@@ -10,14 +10,32 @@ const schema = z.object({
   SHOPIFY_WEBHOOK_SECRET: z.string().min(1),
   SHOPIFY_STORE_DOMAIN: z.string().min(1),
   SHOPIFY_ADMIN_TOKEN: z.string().min(1),
-  CASHFREE_APP_ID: z.string().min(1),
-  CASHFREE_SECRET_KEY: z.string().min(1),
-  CASHFREE_ENV: z.enum(['TEST', 'PROD']),
+  CASHFREE_APP_ID: z.string().optional().default(''),
+  CASHFREE_SECRET_KEY: z.string().optional().default(''),
+  CASHFREE_ENV: z.enum(['TEST', 'PROD']).optional().default('TEST'),
   SHEET_ID: z.string().min(1),
   DASHBOARD_TOKEN: z.string().min(1),
   COD_FEE_INR: z.coerce.number().int().nonnegative().default(50),
   COD_GATEWAY_NAMES: z.string().default('cash on delivery,cod'),
   TEMPLATE_LANG: z.string().default('en'),
+  SHADOWFAX_BASE_URL: z.string().url(),
+  SHADOWFAX_API_KEY: z.string().min(1),
+  SHADOWFAX_WEBHOOK_SECRET: z.string().min(1),
+  SELLER_LEGAL_NAME: z.string().min(1),
+  SELLER_ADDRESS: z.string().min(1),
+  SELLER_GSTIN: z.string().length(15),
+  SELLER_STATE_CODE: z.string().length(2).default('19'),
+  DEFAULT_HSN: z.string().min(4),
+  GST_SLAB_THRESHOLD_INR: z.coerce.number().positive().default(2500),
+  GST_RATE_LOW: z.coerce.number().nonnegative().default(5),
+  GST_RATE_HIGH: z.coerce.number().nonnegative().default(18),
+  INVOICE_SERIES_PREFIX: z.string().min(1).default('UM'),
+  PLATFORM_FEE_PCT: z.coerce.number().nonnegative().default(5),
+  CORPORATE_TAX_PCT: z.coerce.number().nonnegative().default(25),
+  PAY_EARLY_ENABLED: z.enum(['true', 'false']).default('false'),
+  RATING_DELAY_DAYS: z.coerce.number().int().positive().default(3),
+  JUDGEME_REVIEW_URL: z.string().url(),
+  INTERNAL_TASK_TOKEN: z.string().min(16),
 });
 
 export interface Config {
@@ -38,6 +56,24 @@ export interface Config {
   codFeeInr: number;
   codGatewayNames: string[];
   templateLang: string;
+  shadowfaxBaseUrl: string;
+  shadowfaxApiKey: string;
+  shadowfaxWebhookSecret: string;
+  sellerLegalName: string;
+  sellerAddress: string;
+  sellerGstin: string;
+  sellerStateCode: string;
+  defaultHsn: string;
+  gstSlabThresholdInr: number;
+  gstRateLow: number;
+  gstRateHigh: number;
+  invoiceSeriesPrefix: string;
+  platformFeePct: number;
+  corporateTaxPct: number;
+  payEarlyEnabled: boolean;
+  ratingDelayDays: number;
+  judgemeReviewUrl: string;
+  internalTaskToken: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -69,5 +105,23 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       .map((name) => name.trim().toLowerCase())
       .filter((name) => name.length > 0),
     templateLang: e.TEMPLATE_LANG,
+    shadowfaxBaseUrl: e.SHADOWFAX_BASE_URL,
+    shadowfaxApiKey: e.SHADOWFAX_API_KEY,
+    shadowfaxWebhookSecret: e.SHADOWFAX_WEBHOOK_SECRET,
+    sellerLegalName: e.SELLER_LEGAL_NAME,
+    sellerAddress: e.SELLER_ADDRESS,
+    sellerGstin: e.SELLER_GSTIN,
+    sellerStateCode: e.SELLER_STATE_CODE,
+    defaultHsn: e.DEFAULT_HSN,
+    gstSlabThresholdInr: e.GST_SLAB_THRESHOLD_INR,
+    gstRateLow: e.GST_RATE_LOW,
+    gstRateHigh: e.GST_RATE_HIGH,
+    invoiceSeriesPrefix: e.INVOICE_SERIES_PREFIX,
+    platformFeePct: e.PLATFORM_FEE_PCT,
+    corporateTaxPct: e.CORPORATE_TAX_PCT,
+    payEarlyEnabled: e.PAY_EARLY_ENABLED === 'true',
+    ratingDelayDays: e.RATING_DELAY_DAYS,
+    judgemeReviewUrl: e.JUDGEME_REVIEW_URL,
+    internalTaskToken: e.INTERNAL_TASK_TOKEN,
   };
 }
