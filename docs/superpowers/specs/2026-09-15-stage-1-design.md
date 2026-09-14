@@ -135,7 +135,7 @@ address a range wider than the fields named in the patch.
 The ledger's operator block is additionally protected by construction: the ledger
 writer is a distinct method with a hardcoded column ceiling of `Q`.
 
-### 4.2 `orders` (existing, extended A:M → A:S)
+### 4.2 `orders` (existing, extended A:M → A:T)
 
 Existing A–M unchanged. New:
 
@@ -147,6 +147,7 @@ Existing A–M unchanged. New:
 | Q | `cancel_reason` | `RTO \| CUSTOMER_REQUEST \| REFUSED_DELIVERY \| UNDELIVERABLE` |
 | R | `invoice_no` | blank until delivered |
 | S | `rating` | `1-2 \| 3 \| 4-5`, blank until answered |
+| T | `gst_discrepancy` | computed-vs-Shopify tax gap, `0` when they agree — §5.4 |
 
 ### 4.3 `shipments`
 
@@ -201,12 +202,19 @@ Everything outside this block stays `RAW`.
 
 ### 4.5 `invoices`
 
-`invoice_no · order_no · invoice_date · place_of_supply · hsn · taxable_value ·
-gst_rate · cgst · sgst · igst · shipping_taxable · shipping_gst · round_off ·
-total · media_id · status`
+`invoice_no · order_no · invoice_date · place_of_supply · hsn · gst_rate ·
+taxable_value · cgst · sgst · igst · round_off · invoice_total · media_id · status`
+
+**One row per (invoice, GST rate).** A mixed-rate order writes two rows sharing an
+invoice number. A single `gst_rate` per invoice would roll the whole invoice up at one
+rate in B2CS — which is exactly the figure the GST portal reconciles — so the register
+is rate-wise at source. Shipping tax folds into the row for the rate it was
+apportioned to. `round_off` and `invoice_total` are invoice-level and repeat across
+rows sharing a number.
 
 `status` ∈ `ISSUED | VOID`. A `VOID` row exists only where the process died between
-number allocation and a successful render — see §6.3.
+number allocation and a successful render — see §5.6. Voiding marks every row of that
+number.
 
 ### 4.6 `contacts`, `campaigns`, `campaign_sends`, `b2cs`
 
@@ -300,11 +308,17 @@ Per-line rounding guarantees drift. **A round-off line forces the invoice total 
 equal the amount charged, exactly.** An invoice that differs from the payment by ₹0.01
 is a real reconciliation problem, not a cosmetic one.
 
-Separately, the hub compares its computed GST total against the order's `tax_lines`.
-Beyond a ±₹1 tolerance the discrepancy is written to the dashboard. **The invoice
-still issues on the hub's rule** — the check exists so a misconfigured Shopify tax
-setting surfaces visibly instead of producing an invoice that silently disagrees with
-what was charged.
+Separately, the hub compares its computed GST total against the order's `tax_lines`
+**at intake**, not at invoicing — a wrong tax setting is worth knowing about the day
+it starts, not weeks later when the parcel lands. Beyond a ±₹1 tolerance the gap is
+written to `orders.gst_discrepancy` and surfaced on the dashboard. **The invoice still
+issues on the hub's rule** — the check exists so a misconfigured Shopify tax setting
+becomes visible instead of producing an invoice that silently disagrees with what was
+charged.
+
+An order carrying no `tax_lines` at all records no discrepancy. A store with tax
+collection switched off would otherwise flag every single order, which makes the
+signal useless rather than informative.
 
 ### 5.5 Invoice document
 
