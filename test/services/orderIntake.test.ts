@@ -3,8 +3,11 @@ import { OrderIntakeService } from '../../src/services/orderIntake.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
 import { StubWhatsAppClient } from '../fakes/stubClients.js';
 import { shopifyOrderPayload } from '../fixtures/shopifyOrder.js';
+import type { GstRates } from '../../src/core/gst.js';
 
 const NOW = new Date('2026-08-16T10:00:00.000Z');
+const RATES: GstRates = { thresholdInr: 2500, low: 5, high: 18 };
+const CORPORATE_TAX_PCT = 25;
 
 function build() {
   const store = new InMemorySheetStore();
@@ -15,6 +18,8 @@ function build() {
     codFeeInr: 50,
     codGatewayNames: ['cash on delivery', 'cod'],
     templateLang: 'en',
+    rates: RATES,
+    corporateTaxPct: CORPORATE_TAX_PCT,
     now: () => NOW,
   });
   return { store, whatsapp, service };
@@ -123,5 +128,38 @@ describe('OrderIntakeService', () => {
 
   it('propagates a parse failure so the route can answer 500', async () => {
     await expect(ctx.service.handle({ name: '#1042' })).rejects.toThrow(/id/);
+  });
+
+  it('writes a ledger row at order intake', async () => {
+    await ctx.service.handle(shopifyOrderPayload());
+    expect(ctx.store.ledger).toHaveLength(1);
+    expect(ctx.store.ledger[0]).toMatchObject({ orderNo: '#1042', posCode: '19' });
+  });
+
+  it('leaves the operator block untouched at intake', async () => {
+    await ctx.service.handle(shopifyOrderPayload());
+    expect(ctx.store.ledger[0]).not.toHaveProperty('cogs');
+    expect(ctx.store.ledger[0]).not.toHaveProperty('rtoLoss');
+  });
+
+  it('records no discrepancy when Shopify agrees with the slab rule', async () => {
+    // ₹1899 inclusive at 5% → ₹90.43 GST; the payload's tax_lines say the same.
+    await ctx.service.handle(shopifyOrderPayload({ tax_lines: [{ price: '90.43' }] }));
+    expect((await ctx.store.findOrderByNo('#1042'))?.gstDiscrepancy).toBe(0);
+  });
+
+  it('records the gap when Shopify charged a different rate', async () => {
+    await ctx.service.handle(shopifyOrderPayload({ tax_lines: [{ price: '289.68' }] })); // 18%
+    expect((await ctx.store.findOrderByNo('#1042'))?.gstDiscrepancy).toBe(199.25);
+  });
+
+  it('treats a gap under ₹1 as agreement, since per-line rounding always drifts', async () => {
+    await ctx.service.handle(shopifyOrderPayload({ tax_lines: [{ price: '90.90' }] }));
+    expect((await ctx.store.findOrderByNo('#1042'))?.gstDiscrepancy).toBe(0);
+  });
+
+  it('records no discrepancy when the payload carries no tax_lines at all', async () => {
+    await ctx.service.handle(shopifyOrderPayload({ tax_lines: undefined }));
+    expect((await ctx.store.findOrderByNo('#1042'))?.gstDiscrepancy).toBe(0);
   });
 });

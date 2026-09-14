@@ -9,7 +9,17 @@ import {
 } from '../../src/adapters/googleSheetStore.js';
 import type { SheetsApi } from '../../src/adapters/googleSheetStore.js';
 import { ORDER_COLUMNS, ORDER_HEADERS, type OrderRow } from '../../src/adapters/sheets.js';
+import { ledgerOrderValues, type LedgerOrderFields } from '../../src/core/ledgerRow.js';
 import { baseEffect, baseInvoice, baseShipment } from '../fixtures/stage1.js';
+
+function ledgerOrder(overrides: Partial<LedgerOrderFields> = {}): LedgerOrderFields {
+  return {
+    orderNo: '#1042', orderDate: '2026-09-15', pincode: '700001', state: 'West Bengal',
+    posCode: '19', skus: 'TEE-BLK-L x2', itemAmount: 1800, shippingCharged: 99,
+    grossAmount: 1899, isCod: true,
+    ...overrides,
+  };
+}
 
 function order(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -60,10 +70,16 @@ class FakeSheetsApi implements SheetsApi {
     range: string,
     values: unknown[][],
   ): Promise<{ updatedRange: string }> {
-    const tab = range.split('!')[0]!;
-    this.tabs[tab] = [...(this.tabs[tab] ?? []), ...values];
+    const [tab, colsPart] = range.split('!');
+    const existing = this.tabs[tab!] ?? [];
+    // Mirrors real Sheets behaviour: rows land after whatever is already there,
+    // and the response range names the actual rows written, not the request range.
+    const startRow = existing.length + 1;
+    const endRow = startRow + values.length - 1;
+    this.tabs[tab!] = [...existing, ...values];
     this.appended.push({ range, values });
-    return { updatedRange: range };
+    const [startCol, endCol] = (colsPart ?? 'A:A').split(':');
+    return { updatedRange: `${tab}!${startCol}${startRow}:${endCol ?? startCol}${endRow}` };
   }
 
   async updateValues(_sheetId: string, range: string, values: unknown[][]): Promise<void> {
@@ -409,5 +425,77 @@ describe('GoogleSheetStore effects', () => {
     api.tabs.effects = [['header']];
     await new GoogleSheetStore(api, 'sheet123').updateEffect('nope', { state: 'DONE' });
     expect(api.batchUpdated).toHaveLength(0);
+  });
+});
+
+describe('GoogleSheetStore ledger — the operator block (R–V) must be unreachable', () => {
+  it('appends A–J, never touching a column past J on the append call', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.ledger = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.appendLedgerOrder(ledgerOrder(), 25);
+    expect(api.appended).toHaveLength(1);
+    expect(api.appended[0]?.range).toBe('ledger!A:J');
+    expect(api.appended[0]?.values).toEqual([ledgerOrderValues(ledgerOrder())]);
+  });
+
+  it('writes the W–Y formulas at the row the append landed on, as USER_ENTERED', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.ledger = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.appendLedgerOrder(ledgerOrder(), 25);
+    expect(api.batchUpdated).toEqual([
+      {
+        range: 'ledger!W2:Y2',
+        values: [['=P2-M2-N2-R2-U2', '=W2-T2-S2-Q2', '=X2*(1-0.25)']],
+        raw: false,
+      },
+    ]);
+  });
+
+  it('writes the outcome to K–Q only — never R–V, never the whole row', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.ledger = [['header'], ledgerOrderValues(ledgerOrder())];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.updateLedgerOutcome('#1042', {
+      taxableValue: 1808.57, gstRate: 5, gstOnGoods: 90.43, gstOnShipping: 0,
+      outcome: 'DELIVERED', collectedAmount: 1899, platformFee: 94.95,
+    });
+    expect(api.batchUpdated).toHaveLength(1);
+    const write = api.batchUpdated[0]!;
+    expect(write.range).toBe('ledger!K2:Q2');
+    // No range this method could ever produce reaches past Q — R (cod_charges)
+    // through V (notes) and W–Y (the formulas) stay exclusively hub-unreachable here.
+    const [, endCol] = write.range.split(':').map((half) => half.replace(/[!\d]/g, ''));
+    expect(endCol).toBe('Q');
+  });
+
+  it('does nothing when the order has no ledger row yet', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.ledger = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.updateLedgerOutcome('#9999', {
+      taxableValue: 0, gstRate: 0, gstOnGoods: 0, gstOnShipping: 0,
+      outcome: 'CANCELLED', collectedAmount: 0, platformFee: 0,
+    });
+    expect(api.batchUpdated).toHaveLength(0);
+  });
+
+  it('has no method capable of writing a whole ledger row', () => {
+    expect(
+      (GoogleSheetStore.prototype as unknown as Record<string, unknown>).updateLedgerRow,
+    ).toBeUndefined();
+    expect(
+      (GoogleSheetStore.prototype as unknown as Record<string, unknown>).updateLedger,
+    ).toBeUndefined();
+  });
+
+  it('lists ledger rows keyed by header name', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.ledger = [['header'], ledgerOrderValues(ledgerOrder())];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    const rows = await store.listLedger();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ order_no: '#1042', pos_code: '19' });
   });
 });

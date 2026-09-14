@@ -1,4 +1,5 @@
 import type { FulfillmentStatus } from '../core/shipmentState.js';
+import type { LedgerOrderFields, LedgerOutcomeFields } from '../core/ledgerRow.js';
 
 export type ConfirmStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'PAID_EARLY' | 'NO_RESPONSE';
 
@@ -116,6 +117,14 @@ export interface SheetStore {
   /** PENDING effects whose next attempt is at or before `nowIso`. */
   listDueEffects(nowIso: string): Promise<EffectRow[]>;
   updateEffect(effectId: string, patch: Partial<EffectRow>): Promise<void>;
+  /**
+   * Writes A–J only, then the W–Y formulas. There is deliberately no method
+   * on this interface that can address the operator-owned R–V columns.
+   */
+  appendLedgerOrder(fields: LedgerOrderFields, corporateTaxPct: number): Promise<void>;
+  /** Writes K–Q only — the ceiling is why this exists as its own method. */
+  updateLedgerOutcome(orderNo: string, fields: LedgerOutcomeFields): Promise<void>;
+  listLedger(): Promise<Record<string, unknown>[]>;
 }
 
 /** Field → column letter. The single source of truth for where each field lives. */

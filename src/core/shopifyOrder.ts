@@ -1,3 +1,5 @@
+import { round2 } from './gst.js';
+import type { GstLine } from './gst.js';
 import { normalizeIndianPhone } from './phone.js';
 
 export interface ParsedOrder {
@@ -8,6 +10,13 @@ export interface ParsedOrder {
   amount: number;
   isCod: boolean;
   itemsSummary: string;
+  pincode: string;
+  provinceCode: string | null;
+  provinceName: string;
+  shippingCharged: number;
+  itemAmount: number;
+  lines: GstLine[];
+  shopifyTaxTotal: number;
 }
 
 const SUMMARY_MAX = 180;
@@ -15,18 +24,24 @@ const SUMMARY_MAX = 180;
 interface RawAddress {
   phone?: string | null;
   first_name?: string | null;
+  zip?: string | null;
+  province_code?: string | null;
+  province?: string | null;
 }
 
 interface RawPayload {
   id?: unknown;
   name?: unknown;
   total_price?: unknown;
+  subtotal_price?: unknown;
   financial_status?: unknown;
   payment_gateway_names?: unknown;
   customer?: { first_name?: string | null; phone?: string | null } | null;
   shipping_address?: RawAddress | null;
   billing_address?: RawAddress | null;
-  line_items?: Array<{ title?: string | null; quantity?: number | null }> | null;
+  line_items?: Array<{ title?: string | null; quantity?: number | null; price?: unknown }> | null;
+  total_shipping_price_set?: { shop_money?: { amount?: unknown } | null } | null;
+  tax_lines?: Array<{ price?: unknown }> | null;
 }
 
 function detectCod(payload: RawPayload, codGatewayNames: string[]): boolean {
@@ -72,6 +87,16 @@ export function parseShopifyOrder(payload: unknown, codGatewayNames: string[]): 
 
   const amount = Math.round(Number(raw.total_price ?? 0));
 
+  const lines: GstLine[] = (Array.isArray(raw.line_items) ? raw.line_items : []).map((item) => ({
+    inclUnitPrice: Number(item?.price ?? 0),
+    quantity: Number(item?.quantity ?? 0),
+  }));
+
+  const shopifyTaxTotal = round2(
+    (Array.isArray(raw.tax_lines) ? raw.tax_lines : [])
+      .reduce((sum, line) => sum + Number(line?.price ?? 0), 0),
+  );
+
   return {
     orderNo: raw.name,
     orderId: String(raw.id),
@@ -80,5 +105,12 @@ export function parseShopifyOrder(payload: unknown, codGatewayNames: string[]): 
     amount: Number.isFinite(amount) ? amount : 0,
     isCod: detectCod(raw, codGatewayNames),
     itemsSummary: buildItemsSummary(raw),
+    pincode: raw.shipping_address?.zip ?? '',
+    provinceCode: raw.shipping_address?.province_code ?? null,
+    provinceName: raw.shipping_address?.province ?? '',
+    shippingCharged: Number(raw.total_shipping_price_set?.shop_money?.amount ?? 0),
+    itemAmount: Number(raw.subtotal_price ?? 0),
+    lines,
+    shopifyTaxTotal,
   };
 }

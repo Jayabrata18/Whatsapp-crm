@@ -1,5 +1,6 @@
 import { isTerminal } from '../../src/core/shipmentState.js';
 import { parseSequence } from '../../src/core/invoiceNumber.js';
+import type { LedgerOrderFields, LedgerOutcomeFields } from '../../src/core/ledgerRow.js';
 import type {
   EffectRow,
   EventSource,
@@ -9,6 +10,9 @@ import type {
   ShipmentRow,
   SheetStore,
 } from '../../src/adapters/sheets.js';
+
+/** What the fake actually stores: the hub-owned order fields, plus outcome fields once filled in. */
+type LedgerRecord = LedgerOrderFields & Partial<LedgerOutcomeFields>;
 
 /** FY segment of `PREFIX/FY/SEQ`, e.g. `26-27` out of `UM/26-27/0007`. */
 function invoiceFy(invoiceNo: string): string {
@@ -22,6 +26,7 @@ export class InMemorySheetStore implements SheetStore {
   shipments: ShipmentRow[] = [];
   invoices: InvoiceRow[] = [];
   effects: EffectRow[] = [];
+  ledger: LedgerRecord[] = [];
 
   async appendOrder(row: OrderRow): Promise<void> {
     this.orders.push({ ...row });
@@ -122,5 +127,21 @@ export class InMemorySheetStore implements SheetStore {
     const index = this.effects.findIndex((e) => e.effectId === effectId);
     if (index === -1) return;
     this.effects[index] = { ...this.effects[index]!, ...patch };
+  }
+
+  // There is deliberately no method here that can touch the operator-owned R–V
+  // block: LedgerRecord is built only from LedgerOrderFields and LedgerOutcomeFields.
+  async appendLedgerOrder(fields: LedgerOrderFields, _corporateTaxPct: number): Promise<void> {
+    this.ledger.push({ ...fields });
+  }
+
+  async updateLedgerOutcome(orderNo: string, fields: LedgerOutcomeFields): Promise<void> {
+    const index = this.ledger.findIndex((row) => row.orderNo === orderNo);
+    if (index === -1) return;
+    this.ledger[index] = { ...this.ledger[index]!, ...fields };
+  }
+
+  async listLedger(): Promise<Record<string, unknown>[]> {
+    return this.ledger.map((row) => ({ ...row }));
   }
 }

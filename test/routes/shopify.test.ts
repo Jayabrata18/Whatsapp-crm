@@ -23,6 +23,8 @@ function build() {
     codFeeInr: 50,
     codGatewayNames: ['cash on delivery', 'cod'],
     templateLang: 'en',
+    rates: { thresholdInr: 2500, low: 5, high: 18 },
+    corporateTaxPct: 25,
   });
   const app = createApp({ routers: [createShopifyRouter({ intake, webhookSecret: SECRET })] });
   const server = app.listen(0);

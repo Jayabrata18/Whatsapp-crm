@@ -2,6 +2,15 @@ import { google } from 'googleapis';
 import { isTerminal } from '../core/shipmentState.js';
 import { parseSequence } from '../core/invoiceNumber.js';
 import {
+  LEDGER_HEADERS,
+  LEDGER_HUB_CEILING,
+  ledgerFormulas,
+  ledgerOrderValues,
+  ledgerOutcomeValues,
+  type LedgerOrderFields,
+  type LedgerOutcomeFields,
+} from '../core/ledgerRow.js';
+import {
   EFFECT_COLUMNS,
   INVOICE_COLUMNS,
   ORDER_COLUMNS,
@@ -36,6 +45,8 @@ const EVENTS_RANGE = 'events!A:C';
 const SHIPMENTS_RANGE = 'shipments!A:K';
 const INVOICES_RANGE = 'invoices!A:N';
 const EFFECTS_RANGE = 'effects!A:I';
+const LEDGER_APPEND_RANGE = 'ledger!A:J';
+const LEDGER_LOOKUP_RANGE = 'ledger!A:A';
 
 export function orderRowToValues(row: OrderRow): (string | number | boolean)[] {
   return [
@@ -398,6 +409,53 @@ export class GoogleSheetStore implements SheetStore {
       });
 
     if (data.length > 0) await this.batchWrite(data);
+  }
+
+  /** 1-indexed sheet row whose column A equals `orderNo`, or null if there is none. */
+  private async ledgerRowFor(orderNo: string): Promise<number | null> {
+    const values = await this.api.getValues(this.sheetId, LEDGER_LOOKUP_RANGE);
+    const index = values.findIndex((row, i) => i > 0 && str(row[0]) === orderNo);
+    return index === -1 ? null : index + 1;
+  }
+
+  /**
+   * Writes A–J, then reads the sheet row the append landed on to write the W–Y
+   * formulas. A hardcoded `A:J` — not a computed range — is what keeps this call
+   * structurally incapable of reaching the operator's R–V columns.
+   */
+  async appendLedgerOrder(fields: LedgerOrderFields, corporateTaxPct: number): Promise<void> {
+    const { updatedRange } = await this.api.appendValues(
+      this.sheetId, LEDGER_APPEND_RANGE, [ledgerOrderValues(fields)],
+    );
+    const sheetRow = Number.parseInt(updatedRange.match(/!\D+(\d+)/)?.[1] ?? '0', 10);
+    if (sheetRow === 0) return;
+    await this.api.batchUpdateValues(this.sheetId, [
+      {
+        range: `ledger!W${sheetRow}:Y${sheetRow}`,
+        values: [ledgerFormulas(sheetRow, corporateTaxPct)],
+        raw: false,
+      },
+    ]);
+  }
+
+  /** K–Q only. The ceiling is why this is a hardcoded range, not a computed one. */
+  async updateLedgerOutcome(orderNo: string, fields: LedgerOutcomeFields): Promise<void> {
+    const sheetRow = await this.ledgerRowFor(orderNo);
+    if (sheetRow === null) return;
+    await this.api.batchUpdateValues(this.sheetId, [
+      {
+        range: `ledger!K${sheetRow}:${LEDGER_HUB_CEILING}${sheetRow}`,
+        values: [ledgerOutcomeValues(fields)],
+      },
+    ]);
+  }
+
+  async listLedger(): Promise<Record<string, unknown>[]> {
+    const values = await this.api.getValues(this.sheetId, 'ledger!A:Y');
+    return values
+      .slice(1)
+      .filter((row) => str(row[0]) !== '')
+      .map((row) => Object.fromEntries(LEDGER_HEADERS.map((header, i) => [header, row[i] ?? ''])));
   }
 }
 

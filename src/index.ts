@@ -29,6 +29,12 @@ const intake = new OrderIntakeService({
   codFeeInr: config.codFeeInr,
   codGatewayNames: config.codGatewayNames,
   templateLang: config.templateLang,
+  rates: {
+    thresholdInr: config.gstSlabThresholdInr,
+    low: config.gstRateLow,
+    high: config.gstRateHigh,
+  },
+  corporateTaxPct: config.corporateTaxPct,
 });
 
 const payments = new CashfreeClient({

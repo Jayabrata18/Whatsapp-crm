@@ -15,6 +15,16 @@ describe('parseShopifyOrder', () => {
       amount: 1899,
       isCod: true,
       itemsSummary: 'Oversized Tee — Black x2, Cargo Pants — Olive x1',
+      pincode: '700001',
+      provinceCode: 'WB',
+      provinceName: 'West Bengal',
+      shippingCharged: 0,
+      itemAmount: 1899,
+      lines: [
+        { inclUnitPrice: 600, quantity: 2 },
+        { inclUnitPrice: 699, quantity: 1 },
+      ],
+      shopifyTaxTotal: 0,
     });
   });
 
