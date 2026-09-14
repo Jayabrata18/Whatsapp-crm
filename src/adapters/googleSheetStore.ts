@@ -1,9 +1,17 @@
 import { google } from 'googleapis';
+import { isTerminal } from '../core/shipmentState.js';
+import { parseSequence } from '../core/invoiceNumber.js';
 import {
+  EFFECT_COLUMNS,
+  INVOICE_COLUMNS,
   ORDER_COLUMNS,
+  SHIPMENT_COLUMNS,
+  type EffectRow,
   type EventSource,
+  type InvoiceRow,
   type MessageRow,
   type OrderRow,
+  type ShipmentRow,
   type SheetStore,
 } from './sheets.js';
 
@@ -25,6 +33,9 @@ export interface SheetsApi {
 const ORDERS_RANGE = 'orders!A:T';
 const MESSAGES_RANGE = 'messages!A:F';
 const EVENTS_RANGE = 'events!A:C';
+const SHIPMENTS_RANGE = 'shipments!A:K';
+const INVOICES_RANGE = 'invoices!A:N';
+const EFFECTS_RANGE = 'effects!A:I';
 
 export function orderRowToValues(row: OrderRow): (string | number | boolean)[] {
   return [
@@ -87,6 +98,109 @@ export function valuesToOrderRow(values: unknown[]): OrderRow {
 
 function messageRowToValues(row: MessageRow): string[] {
   return [row.orderNo, row.template, row.wamid, row.direction, row.status, row.timestamp];
+}
+
+export function shipmentRowToValues(row: ShipmentRow): (string | number)[] {
+  return [
+    row.orderNo,
+    row.awb,
+    row.courier,
+    row.status,
+    row.shippedAt,
+    row.ofdAt,
+    row.deliveredAt,
+    row.rtoInitiatedAt,
+    row.rtoReturnedAt,
+    row.lastSyncedAt,
+    row.rawStatus,
+  ];
+}
+
+export function valuesToShipmentRow(values: unknown[]): ShipmentRow {
+  return {
+    orderNo: str(values[0]),
+    awb: str(values[1]),
+    courier: str(values[2]),
+    status: (str(values[3]) || 'NEW') as ShipmentRow['status'],
+    shippedAt: str(values[4]),
+    ofdAt: str(values[5]),
+    deliveredAt: str(values[6]),
+    rtoInitiatedAt: str(values[7]),
+    rtoReturnedAt: str(values[8]),
+    lastSyncedAt: str(values[9]),
+    rawStatus: str(values[10]),
+  };
+}
+
+export function invoiceRowToValues(row: InvoiceRow): (string | number)[] {
+  return [
+    row.invoiceNo,
+    row.orderNo,
+    row.invoiceDate,
+    row.placeOfSupply,
+    row.hsn,
+    row.gstRate,
+    row.taxableValue,
+    row.cgst,
+    row.sgst,
+    row.igst,
+    row.roundOff,
+    row.invoiceTotal,
+    row.mediaId,
+    row.status,
+  ];
+}
+
+export function valuesToInvoiceRow(values: unknown[]): InvoiceRow {
+  return {
+    invoiceNo: str(values[0]),
+    orderNo: str(values[1]),
+    invoiceDate: str(values[2]),
+    placeOfSupply: str(values[3]),
+    hsn: str(values[4]),
+    gstRate: num(values[5]),
+    taxableValue: num(values[6]),
+    cgst: num(values[7]),
+    sgst: num(values[8]),
+    igst: num(values[9]),
+    roundOff: num(values[10]),
+    invoiceTotal: num(values[11]),
+    mediaId: str(values[12]),
+    status: (str(values[13]) || 'ISSUED') as InvoiceRow['status'],
+  };
+}
+
+export function effectRowToValues(row: EffectRow): (string | number)[] {
+  return [
+    row.effectId,
+    row.orderNo,
+    row.kind,
+    row.payloadJson,
+    row.attempts,
+    row.state,
+    row.lastError,
+    row.createdAt,
+    row.nextAttemptAt,
+  ];
+}
+
+export function valuesToEffectRow(values: unknown[]): EffectRow {
+  return {
+    effectId: str(values[0]),
+    orderNo: str(values[1]),
+    kind: str(values[2]),
+    payloadJson: str(values[3]),
+    attempts: num(values[4]),
+    state: (str(values[5]) || 'PENDING') as EffectRow['state'],
+    lastError: str(values[6]),
+    createdAt: str(values[7]),
+    nextAttemptAt: str(values[8]),
+  };
+}
+
+/** FY segment of `PREFIX/FY/SEQ`, e.g. `26-27` out of `UM/26-27/0007`. */
+function invoiceFy(invoiceNo: string): string {
+  return invoiceNo.split('/')[1] ?? '';
 }
 
 export class GoogleSheetStore implements SheetStore {
@@ -170,6 +284,120 @@ export class GoogleSheetStore implements SheetStore {
     await this.api.appendValues(this.sheetId, EVENTS_RANGE, [
       [source, externalId, new Date().toISOString()],
     ]);
+  }
+
+  /** Rows below the header, paired with their 1-indexed sheet row number. */
+  private async shipmentRowsWithIndex(): Promise<Array<{ row: ShipmentRow; sheetRow: number }>> {
+    const values = await this.api.getValues(this.sheetId, SHIPMENTS_RANGE);
+    return values
+      .slice(1)
+      .map((rowValues, index) => ({ row: valuesToShipmentRow(rowValues), sheetRow: index + 2 }))
+      .filter((entry) => entry.row.awb !== '');
+  }
+
+  async upsertShipment(row: ShipmentRow): Promise<void> {
+    const entry = (await this.shipmentRowsWithIndex()).find((e) => e.row.awb === row.awb);
+    if (!entry) {
+      await this.api.appendValues(this.sheetId, SHIPMENTS_RANGE, [shipmentRowToValues(row)]);
+      return;
+    }
+
+    const data = (Object.keys(row) as Array<keyof ShipmentRow>)
+      .filter((field) => row[field] !== entry.row[field])
+      .map((field) => {
+        const col = SHIPMENT_COLUMNS[field];
+        return {
+          range: `shipments!${col}${entry.sheetRow}:${col}${entry.sheetRow}`,
+          values: [[row[field] as string | number]],
+        };
+      });
+
+    if (data.length > 0) await this.batchWrite(data);
+  }
+
+  async findShipmentByAwb(awb: string): Promise<ShipmentRow | null> {
+    const found = (await this.shipmentRowsWithIndex()).find((entry) => entry.row.awb === awb);
+    return found?.row ?? null;
+  }
+
+  async listOpenShipments(): Promise<ShipmentRow[]> {
+    return (await this.shipmentRowsWithIndex())
+      .map((entry) => entry.row)
+      .filter((row) => !isTerminal(row.status));
+  }
+
+  /** Rows below the header, paired with their 1-indexed sheet row number. */
+  private async invoiceRowsWithIndex(): Promise<Array<{ row: InvoiceRow; sheetRow: number }>> {
+    const values = await this.api.getValues(this.sheetId, INVOICES_RANGE);
+    return values
+      .slice(1)
+      .map((rowValues, index) => ({ row: valuesToInvoiceRow(rowValues), sheetRow: index + 2 }))
+      .filter((entry) => entry.row.invoiceNo !== '');
+  }
+
+  async appendInvoiceLines(rows: InvoiceRow[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.api.appendValues(this.sheetId, INVOICES_RANGE, rows.map(invoiceRowToValues));
+  }
+
+  async listInvoices(): Promise<InvoiceRow[]> {
+    return (await this.invoiceRowsWithIndex()).map((entry) => entry.row);
+  }
+
+  async lastInvoiceSequence(fy: string): Promise<number> {
+    const sequences = (await this.invoiceRowsWithIndex())
+      .map((entry) => entry.row.invoiceNo)
+      .filter((invoiceNo) => invoiceFy(invoiceNo) === fy)
+      .map(parseSequence);
+    return sequences.length > 0 ? Math.max(...sequences) : 0;
+  }
+
+  async voidInvoice(invoiceNo: string): Promise<void> {
+    const entries = (await this.invoiceRowsWithIndex()).filter(
+      (entry) => entry.row.invoiceNo === invoiceNo,
+    );
+    const col = INVOICE_COLUMNS.status;
+    const data = entries.map((entry) => ({
+      range: `invoices!${col}${entry.sheetRow}:${col}${entry.sheetRow}`,
+      values: [['VOID']],
+    }));
+    if (data.length > 0) await this.batchWrite(data);
+  }
+
+  /** Rows below the header, paired with their 1-indexed sheet row number. */
+  private async effectRowsWithIndex(): Promise<Array<{ row: EffectRow; sheetRow: number }>> {
+    const values = await this.api.getValues(this.sheetId, EFFECTS_RANGE);
+    return values
+      .slice(1)
+      .map((rowValues, index) => ({ row: valuesToEffectRow(rowValues), sheetRow: index + 2 }))
+      .filter((entry) => entry.row.effectId !== '');
+  }
+
+  async appendEffect(row: EffectRow): Promise<void> {
+    await this.api.appendValues(this.sheetId, EFFECTS_RANGE, [effectRowToValues(row)]);
+  }
+
+  async listDueEffects(nowIso: string): Promise<EffectRow[]> {
+    return (await this.effectRowsWithIndex())
+      .map((entry) => entry.row)
+      .filter((row) => row.state === 'PENDING' && row.nextAttemptAt <= nowIso);
+  }
+
+  async updateEffect(effectId: string, patch: Partial<EffectRow>): Promise<void> {
+    const entry = (await this.effectRowsWithIndex()).find((e) => e.row.effectId === effectId);
+    if (!entry) return;
+
+    const data = (Object.keys(patch) as Array<keyof EffectRow>)
+      .filter((field) => patch[field] !== undefined)
+      .map((field) => {
+        const col = EFFECT_COLUMNS[field];
+        return {
+          range: `effects!${col}${entry.sheetRow}:${col}${entry.sheetRow}`,
+          values: [[patch[field] as string | number]],
+        };
+      });
+
+    if (data.length > 0) await this.batchWrite(data);
   }
 }
 

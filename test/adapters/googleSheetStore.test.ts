@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   GoogleSheetStore,
+  effectRowToValues,
+  invoiceRowToValues,
   orderRowToValues,
+  shipmentRowToValues,
   valuesToOrderRow,
 } from '../../src/adapters/googleSheetStore.js';
 import type { SheetsApi } from '../../src/adapters/googleSheetStore.js';
 import { ORDER_COLUMNS, ORDER_HEADERS, type OrderRow } from '../../src/adapters/sheets.js';
+import { baseEffect, baseInvoice, baseShipment } from '../fixtures/stage1.js';
 
 function order(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -34,7 +38,14 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
 }
 
 class FakeSheetsApi implements SheetsApi {
-  tabs: Record<string, unknown[][]> = { orders: [], messages: [], events: [] };
+  tabs: Record<string, unknown[][]> = {
+    orders: [],
+    messages: [],
+    events: [],
+    shipments: [],
+    invoices: [],
+    effects: [],
+  };
   appended: Array<{ range: string; values: unknown[][] }> = [];
   updated: Array<{ range: string; values: unknown[][] }> = [];
   batchUpdated: Array<{ range: string; values: unknown[][]; raw?: boolean }> = [];
@@ -271,5 +282,132 @@ describe('GoogleSheetStore', () => {
     expect(
       (GoogleSheetStore.prototype as unknown as Record<string, unknown>).updateOrder,
     ).toBeUndefined();
+  });
+});
+
+describe('GoogleSheetStore shipments', () => {
+  it('appends a new AWB below the header', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.shipments = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.upsertShipment(baseShipment);
+    expect(api.appended[0]?.range).toBe('shipments!A:K');
+    expect(api.appended[0]?.values[0]?.[1]).toBe(baseShipment.awb);
+  });
+
+  it('writes only the changed column when the AWB already exists', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.shipments = [['header'], shipmentRowToValues(baseShipment)];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.upsertShipment({ ...baseShipment, status: 'OFD', ofdAt: '2026-09-11T00:00:00.000Z' });
+    expect(api.batchUpdated).toEqual([
+      { range: 'shipments!D2:D2', values: [['OFD']] },
+      { range: 'shipments!F2:F2', values: [['2026-09-11T00:00:00.000Z']] },
+    ]);
+    expect(api.appended).toHaveLength(0);
+  });
+
+  it('finds a shipment by AWB and returns null otherwise', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.shipments = [['header'], shipmentRowToValues(baseShipment)];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    expect((await store.findShipmentByAwb(baseShipment.awb))?.courier).toBe(baseShipment.courier);
+    expect(await store.findShipmentByAwb('NOPE')).toBeNull();
+  });
+
+  it('lists only non-terminal shipments as open', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.shipments = [
+      ['header'],
+      shipmentRowToValues({ ...baseShipment, awb: 'A', status: 'SHIPPED' }),
+      shipmentRowToValues({ ...baseShipment, awb: 'B', status: 'DELIVERED' }),
+    ];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    expect((await store.listOpenShipments()).map((s) => s.awb)).toEqual(['A']);
+  });
+});
+
+describe('GoogleSheetStore invoices', () => {
+  it('appends every line of a mixed-rate invoice in one call', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.invoices = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.appendInvoiceLines([
+      { ...baseInvoice, invoiceNo: 'UM/26-27/0005', gstRate: 5 },
+      { ...baseInvoice, invoiceNo: 'UM/26-27/0005', gstRate: 18 },
+    ]);
+    expect(api.appended).toHaveLength(1);
+    expect(api.appended[0]?.values).toHaveLength(2);
+    expect(api.appended[0]?.range).toBe('invoices!A:N');
+  });
+
+  it('computes the last sequence for a financial year, counting VOID rows', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.invoices = [
+      ['header'],
+      invoiceRowToValues({ ...baseInvoice, invoiceNo: 'UM/25-26/0009' }),
+      invoiceRowToValues({ ...baseInvoice, invoiceNo: 'UM/26-27/0003', status: 'VOID' }),
+    ];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    expect(await store.lastInvoiceSequence('26-27')).toBe(3);
+    expect(await store.lastInvoiceSequence('27-28')).toBe(0);
+  });
+
+  it('voids every row sharing an invoice number, at their own sheet rows', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.invoices = [
+      ['header'],
+      invoiceRowToValues({ ...baseInvoice, invoiceNo: 'UM/26-27/0006', gstRate: 5 }),
+      invoiceRowToValues({ ...baseInvoice, invoiceNo: 'UM/26-27/0007', gstRate: 5 }),
+      invoiceRowToValues({ ...baseInvoice, invoiceNo: 'UM/26-27/0006', gstRate: 18 }),
+    ];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.voidInvoice('UM/26-27/0006');
+    expect(api.batchUpdated).toEqual([
+      { range: 'invoices!N2:N2', values: [['VOID']] },
+      { range: 'invoices!N4:N4', values: [['VOID']] },
+    ]);
+  });
+});
+
+describe('GoogleSheetStore effects', () => {
+  it('appends an effect below the header', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.effects = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.appendEffect(baseEffect);
+    expect(api.appended[0]?.range).toBe('effects!A:I');
+  });
+
+  it('lists only due PENDING effects', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.effects = [
+      ['header'],
+      effectRowToValues({ ...baseEffect, effectId: 'e1', nextAttemptAt: '2026-09-15T10:00:00.000Z' }),
+      effectRowToValues({ ...baseEffect, effectId: 'e2', nextAttemptAt: '2026-09-15T12:00:00.000Z' }),
+      effectRowToValues({ ...baseEffect, effectId: 'e3', state: 'DONE', nextAttemptAt: '2026-09-15T10:00:00.000Z' }),
+    ];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    const due = await store.listDueEffects('2026-09-15T11:00:00.000Z');
+    expect(due.map((e) => e.effectId)).toEqual(['e1']);
+  });
+
+  it('writes only the columns named in the patch', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.effects = [['header'], effectRowToValues({ ...baseEffect, effectId: 'e1' })];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.updateEffect('e1', { state: 'FAILED', attempts: 1, lastError: 'timeout' });
+    expect(api.batchUpdated).toEqual([
+      { range: 'effects!F2:F2', values: [['FAILED']] },
+      { range: 'effects!E2:E2', values: [[1]] },
+      { range: 'effects!G2:G2', values: [['timeout']] },
+    ]);
+  });
+
+  it('does nothing when updating an unknown effect', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.effects = [['header']];
+    await new GoogleSheetStore(api, 'sheet123').updateEffect('nope', { state: 'DONE' });
+    expect(api.batchUpdated).toHaveLength(0);
   });
 });
