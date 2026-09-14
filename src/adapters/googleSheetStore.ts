@@ -22,7 +22,7 @@ export interface SheetsApi {
   ): Promise<void>;
 }
 
-const ORDERS_RANGE = 'orders!A:M';
+const ORDERS_RANGE = 'orders!A:T';
 const MESSAGES_RANGE = 'messages!A:F';
 const EVENTS_RANGE = 'events!A:C';
 
@@ -41,6 +41,13 @@ export function orderRowToValues(row: OrderRow): (string | number | boolean)[] {
     row.createdAt,
     row.confirmedAt,
     row.paidAt,
+    row.fulfillmentStatus,
+    row.awb,
+    row.cancelStatus,
+    row.cancelReason,
+    row.invoiceNo,
+    row.rating,
+    row.gstDiscrepancy,
   ];
 }
 
@@ -68,6 +75,13 @@ export function valuesToOrderRow(values: unknown[]): OrderRow {
     createdAt: str(values[10]),
     confirmedAt: str(values[11]),
     paidAt: str(values[12]),
+    fulfillmentStatus: (str(values[13]) || 'NEW') as OrderRow['fulfillmentStatus'],
+    awb: str(values[14]),
+    cancelStatus: (str(values[15]) || 'NONE') as OrderRow['cancelStatus'],
+    cancelReason: str(values[16]),
+    invoiceNo: str(values[17]),
+    rating: str(values[18]),
+    gstDiscrepancy: num(values[19]),
   };
 }
 

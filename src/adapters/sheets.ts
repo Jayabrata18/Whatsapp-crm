@@ -1,5 +1,7 @@
 export type ConfirmStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'PAID_EARLY' | 'NO_RESPONSE';
 
+export type CancelStatus = 'NONE' | 'REVIEW_PENDING' | 'CANCELLED';
+
 export interface OrderRow {
   orderNo: string;
   orderId: string;
@@ -14,6 +16,15 @@ export interface OrderRow {
   createdAt: string;
   confirmedAt: string;
   paidAt: string;
+  // TODO(task 7): replace with the shared `FulfillmentStatus` union from
+  // `src/core/shipmentState.ts` once that lands.
+  fulfillmentStatus: 'NEW' | 'SHIPPED' | 'OFD' | 'DELIVERED' | 'RTO_INITIATED' | 'RTO_RETURNED';
+  awb: string;
+  cancelStatus: CancelStatus;
+  cancelReason: string;
+  invoiceNo: string;
+  rating: string;
+  gstDiscrepancy: number;
 }
 
 export interface MessageRow {
@@ -48,6 +59,8 @@ export const ORDER_COLUMNS: Record<keyof OrderRow, string> = {
   amount: 'E', codFee: 'F', payable: 'G', isCod: 'H',
   confirmStatus: 'I', paymentLink: 'J', createdAt: 'K',
   confirmedAt: 'L', paidAt: 'M',
+  fulfillmentStatus: 'N', awb: 'O', cancelStatus: 'P', cancelReason: 'Q',
+  invoiceNo: 'R', rating: 'S', gstDiscrepancy: 'T',
 };
 
 export const ORDER_HEADERS = [
@@ -64,6 +77,13 @@ export const ORDER_HEADERS = [
   'created_at',
   'confirmed_at',
   'paid_at',
+  'fulfillment_status',
+  'awb',
+  'cancel_status',
+  'cancel_reason',
+  'invoice_no',
+  'rating',
+  'gst_discrepancy',
 ] as const;
 
 export const MESSAGE_HEADERS = [

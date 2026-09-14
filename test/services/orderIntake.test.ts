@@ -44,6 +44,13 @@ describe('OrderIntakeService', () => {
       createdAt: NOW.toISOString(),
       confirmedAt: '',
       paidAt: '',
+      fulfillmentStatus: 'NEW',
+      awb: '',
+      cancelStatus: 'NONE',
+      cancelReason: '',
+      invoiceNo: '',
+      rating: '',
+      gstDiscrepancy: 0,
     });
   });
 

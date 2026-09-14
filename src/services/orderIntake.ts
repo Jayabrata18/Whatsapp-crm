@@ -62,6 +62,13 @@ export class OrderIntakeService {
       createdAt: timestamp,
       confirmedAt: '',
       paidAt: '',
+      fulfillmentStatus: 'NEW',
+      awb: '',
+      cancelStatus: 'NONE',
+      cancelReason: '',
+      invoiceNo: '',
+      rating: '',
+      gstDiscrepancy: 0,
     };
     await store.appendOrder(row);
 

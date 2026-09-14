@@ -5,7 +5,7 @@ import {
   valuesToOrderRow,
 } from '../../src/adapters/googleSheetStore.js';
 import type { SheetsApi } from '../../src/adapters/googleSheetStore.js';
-import { ORDER_HEADERS, type OrderRow } from '../../src/adapters/sheets.js';
+import { ORDER_COLUMNS, ORDER_HEADERS, type OrderRow } from '../../src/adapters/sheets.js';
 
 function order(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -22,6 +22,13 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
     createdAt: '2026-08-16T10:00:00.000Z',
     confirmedAt: '',
     paidAt: '',
+    fulfillmentStatus: 'NEW',
+    awb: '',
+    cancelStatus: 'NONE',
+    cancelReason: '',
+    invoiceNo: '',
+    rating: '',
+    gstDiscrepancy: 0,
     ...overrides,
   };
 }
@@ -64,6 +71,26 @@ describe('row serialization', () => {
   it('round-trips an order row', () => {
     const original = order({ paymentLink: 'https://cf.link/abc', confirmedAt: 'x' });
     expect(valuesToOrderRow(orderRowToValues(original))).toEqual(original);
+  });
+
+  it('round-trips the Stage 1 order columns', () => {
+    const row: OrderRow = {
+      ...order(),
+      fulfillmentStatus: 'SHIPPED',
+      awb: 'SF123',
+      cancelStatus: 'REVIEW_PENDING',
+      cancelReason: 'CUSTOMER_REQUEST',
+      invoiceNo: 'UM/26-27/0007',
+      rating: '4-5',
+      gstDiscrepancy: 0,
+    };
+    expect(valuesToOrderRow(orderRowToValues(row))).toEqual(row);
+  });
+
+  it('maps every OrderRow field to a distinct column', () => {
+    const cols = Object.values(ORDER_COLUMNS);
+    expect(new Set(cols).size).toBe(cols.length);
+    expect(cols.length).toBe(ORDER_HEADERS.length);
   });
 
   it('coerces sheet string values back to the right types', () => {
@@ -111,7 +138,7 @@ describe('GoogleSheetStore', () => {
     const api = new FakeSheetsApi();
     const store = new GoogleSheetStore(api, 'sheet123');
     await store.appendOrder(order());
-    expect(api.appended[0]?.range).toBe('orders!A:M');
+    expect(api.appended[0]?.range).toBe('orders!A:T');
     expect(api.appended[0]?.values[0]?.[0]).toBe('#1042');
   });
 
