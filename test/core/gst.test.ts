@@ -33,6 +33,12 @@ describe('computeGst', () => {
       [{ inclUnitPrice: 333, quantity: 3 }, { inclUnitPrice: 777, quantity: 1 }],
       49, 1825, RATES,
     );
+    // Both unit prices (333 and 777) are 5% goods — 777 <= 2500 too — so this
+    // is a single-bucket order, not a mixed-rate one. Pin the actual breakdown
+    // so a wrong-bucket bug can't hide behind the round-off residual, which is
+    // true by construction for any internally-consistent split.
+    expect(b.goods).toEqual([{ rate: 5, taxable: 1691.43, tax: 84.57 }]);
+    expect(b.shipping).toEqual([{ rate: 5, taxable: 46.67, tax: 2.33 }]);
     expect(b.total).toBe(1825);
     expect(round2(b.taxableTotal + b.taxTotal + b.roundOff)).toBe(1825);
     expect(Math.abs(b.roundOff)).toBeLessThan(1);
