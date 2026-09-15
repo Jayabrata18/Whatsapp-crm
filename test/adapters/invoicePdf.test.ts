@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import PDFDocument from 'pdfkit';
 import { PdfKitRenderer, type InvoiceData } from '../../src/adapters/invoicePdf.js';
+import { rupeesInWords } from '../../src/core/amountInWords.js';
 
 const sampleInvoiceData: InvoiceData = {
   invoiceNo: 'UM/26-27/0007',
@@ -57,8 +58,51 @@ describe('PdfKitRenderer', () => {
     expect(bytes.length).toBeGreaterThan(500);
 
     const drawn = drawnText();
-    for (const needed of ['UM/26-27/0007', '19AAAAA0000A1Z5', 'Place of Supply', 'HSN', 'CGST', 'SGST', 'no signature required']) {
-      expect(drawn.some((line) => line.includes(needed))).toBe(true);
+    const containsSubstring = (value: string) => drawn.some((line) => line.includes(value));
+    const line = sampleInvoiceData.lines[0];
+    if (!line) throw new Error('test fixture must have at least one line item');
+
+    // Fields drawn as their own atomic cell/line — assert the exact drawn
+    // value, so this fails if that specific field were ever dropped, not
+    // just if some unrelated string happens to contain it.
+    const expectedWords = rupeesInWords(sampleInvoiceData.total);
+    const exactCells = [
+      'TAX INVOICE',
+      'HSN', // table column header
+      sampleInvoiceData.hsn, // actual HSN code on the line item, not just the header word
+      line.description,
+      String(line.quantity),
+      `Rs ${line.taxable.toFixed(2)}`,
+      `${line.rate}%`,
+      `Rs ${line.tax.toFixed(2)}`,
+      'Shipping',
+      `Rs ${sampleInvoiceData.shippingTaxable.toFixed(2)}`,
+      `Rs ${sampleInvoiceData.shippingTax.toFixed(2)}`,
+      'Computer generated invoice, no signature required',
+    ];
+    for (const value of exactCells) {
+      expect(drawn.includes(value)).toBe(true);
+    }
+
+    // Fields drawn as part of a longer labelled line ("Invoice No: ...") —
+    // assert the field's real value appears, not just the label.
+    const labelledSubstrings = [
+      sampleInvoiceData.seller.legalName,
+      sampleInvoiceData.seller.address,
+      sampleInvoiceData.seller.gstin,
+      sampleInvoiceData.invoiceNo,
+      sampleInvoiceData.invoiceDate,
+      sampleInvoiceData.buyer.name,
+      sampleInvoiceData.buyer.address,
+      sampleInvoiceData.placeOfSupply,
+      `Rs ${sampleInvoiceData.split.cgst.toFixed(2)}`,
+      `Rs ${sampleInvoiceData.split.sgst.toFixed(2)}`,
+      `Rs ${sampleInvoiceData.roundOff.toFixed(2)}`,
+      `Rs ${sampleInvoiceData.total.toFixed(2)}`,
+      expectedWords, // the total-in-words integration with amountInWords.ts
+    ];
+    for (const value of labelledSubstrings) {
+      expect(containsSubstring(value)).toBe(true);
     }
   });
 
@@ -80,5 +124,23 @@ describe('PdfKitRenderer', () => {
     expect(drawn.some((line) => line.includes('IGST'))).toBe(true);
     expect(drawn.some((line) => line.includes('CGST'))).toBe(false);
     expect(drawn.some((line) => line.includes('SGST'))).toBe(false);
+  });
+
+  it('wraps a long description within its column instead of overrunning the next one', async () => {
+    const longDescription =
+      'Premium Heavyweight Oversized Cotton Crewneck T-Shirt With Reinforced Stitching And Ribbed Collar';
+    await new PdfKitRenderer().render({
+      ...sampleInvoiceData,
+      lines: [{ ...sampleInvoiceData.lines[0]!, description: longDescription }],
+    });
+
+    const drawn = drawnText();
+    // The renderer must still hand the full, untruncated description to
+    // pdfkit (wrapping happens inside pdfkit via the column's `width` option,
+    // not by the renderer cutting the string short itself).
+    expect(drawn).toContain(longDescription);
+    // The HSN cell drawn right after it must be exactly the code, not the
+    // tail end of the description spilling over — i.e. columns, not padding.
+    expect(drawn).toContain(sampleInvoiceData.hsn);
   });
 });
