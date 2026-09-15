@@ -39,7 +39,7 @@ export interface SheetsApi {
   ): Promise<void>;
 }
 
-const ORDERS_RANGE = 'orders!A:T';
+const ORDERS_RANGE = 'orders!A:U';
 const MESSAGES_RANGE = 'messages!A:F';
 const EVENTS_RANGE = 'events!A:C';
 const SHIPMENTS_RANGE = 'shipments!A:K';
@@ -70,6 +70,7 @@ export function orderRowToValues(row: OrderRow): (string | number | boolean)[] {
     row.invoiceNo,
     row.rating,
     row.gstDiscrepancy,
+    row.linesJson,
   ];
 }
 
@@ -104,6 +105,7 @@ export function valuesToOrderRow(values: unknown[]): OrderRow {
     invoiceNo: str(values[17]),
     rating: str(values[18]),
     gstDiscrepancy: num(values[19]),
+    linesJson: str(values[20]),
   };
 }
 

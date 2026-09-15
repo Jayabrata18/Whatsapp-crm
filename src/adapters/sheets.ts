@@ -26,6 +26,14 @@ export interface OrderRow {
   invoiceNo: string;
   rating: string;
   gstDiscrepancy: number;
+  /**
+   * The Shopify per-line `{inclUnitPrice, quantity}` array captured at intake, JSON-encoded.
+   * A tax invoice must reflect what the customer was actually charged at order time, not a
+   * later re-read — and delivery can happen days after intake — so this freezes the exact
+   * rate-determining data `computeGst` needs, rather than re-deriving it from an aggregate.
+   * Blank for orders placed before this column existed.
+   */
+  linesJson: string;
 }
 
 export interface MessageRow {
@@ -134,7 +142,7 @@ export const ORDER_COLUMNS: Record<keyof OrderRow, string> = {
   confirmStatus: 'I', paymentLink: 'J', createdAt: 'K',
   confirmedAt: 'L', paidAt: 'M',
   fulfillmentStatus: 'N', awb: 'O', cancelStatus: 'P', cancelReason: 'Q',
-  invoiceNo: 'R', rating: 'S', gstDiscrepancy: 'T',
+  invoiceNo: 'R', rating: 'S', gstDiscrepancy: 'T', linesJson: 'U',
 };
 
 export const ORDER_HEADERS = [
@@ -158,6 +166,7 @@ export const ORDER_HEADERS = [
   'invoice_no',
   'rating',
   'gst_discrepancy',
+  'lines_json',
 ] as const;
 
 export const MESSAGE_HEADERS = [

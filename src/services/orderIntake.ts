@@ -77,6 +77,9 @@ export class OrderIntakeService {
       invoiceNo: '',
       rating: '',
       gstDiscrepancy: 0,
+      // Frozen here, not re-derived at invoicing time: a tax invoice must reflect what the
+      // customer was actually charged at order time, and delivery can be days later.
+      linesJson: JSON.stringify(parsed.lines),
     };
     await store.appendOrder(row);
 

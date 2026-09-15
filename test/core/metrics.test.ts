@@ -24,6 +24,7 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
     invoiceNo: '',
     rating: '',
     gstDiscrepancy: 0,
+    linesJson: '',
     ...overrides,
   };
 }

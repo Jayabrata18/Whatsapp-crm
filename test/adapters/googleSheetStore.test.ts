@@ -43,6 +43,7 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
     invoiceNo: '',
     rating: '',
     gstDiscrepancy: 0,
+    linesJson: '',
     ...overrides,
   };
 }
@@ -165,7 +166,7 @@ describe('GoogleSheetStore', () => {
     const api = new FakeSheetsApi();
     const store = new GoogleSheetStore(api, 'sheet123');
     await store.appendOrder(order());
-    expect(api.appended[0]?.range).toBe('orders!A:T');
+    expect(api.appended[0]?.range).toBe('orders!A:U');
     expect(api.appended[0]?.values[0]?.[0]).toBe('#1042');
   });
 

@@ -56,6 +56,7 @@ describe('POST /webhook/cashfree', () => {
       invoiceNo: '',
       rating: '',
       gstDiscrepancy: 0,
+      linesJson: '',
     });
   });
   afterEach(() => {

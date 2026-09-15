@@ -109,6 +109,7 @@ describe('POST /webhook/meta', () => {
       invoiceNo: '',
       rating: '',
       gstDiscrepancy: 0,
+      linesJson: '',
     });
   });
   afterEach(() => {
