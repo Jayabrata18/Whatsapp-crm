@@ -18,11 +18,13 @@
   "dependencies": {
     "express": "^5.1.0",
     "googleapis": "^174.0.1",
+    "pdfkit": "^0.20.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
+    "@types/pdfkit": "^0.17.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "vitest": "^4.1.10"
