@@ -1,6 +1,12 @@
 import { isTerminal } from '../../src/core/shipmentState.js';
 import { parseSequence } from '../../src/core/invoiceNumber.js';
-import type { LedgerOrderFields, LedgerOutcomeFields } from '../../src/core/ledgerRow.js';
+import {
+  LEDGER_HEADERS,
+  ledgerOrderValues,
+  ledgerOutcomeValues,
+  type LedgerOrderFields,
+  type LedgerOutcomeFields,
+} from '../../src/core/ledgerRow.js';
 import type {
   EffectRow,
   EventSource,
@@ -141,7 +147,19 @@ export class InMemorySheetStore implements SheetStore {
     this.ledger[index] = { ...this.ledger[index]!, ...fields };
   }
 
+  /**
+   * Zips against `LEDGER_HEADERS` exactly like `GoogleSheetStore.listLedger()` does against
+   * `ledger!A:Y` — a consumer keying off snake_case column names (the only contract the real
+   * adapter offers) must see the same shape here, not the fake's internal camelCase storage.
+   */
   async listLedger(): Promise<Record<string, unknown>[]> {
-    return this.ledger.map((row) => ({ ...row }));
+    return this.ledger.map((row) => {
+      const orderValues = ledgerOrderValues(row);
+      const outcomeValues =
+        row.outcome !== undefined ? ledgerOutcomeValues(row as LedgerOutcomeFields) : ['', '', '', '', '', '', ''];
+      const formulaValues = ['', '', '']; // W–Y are live sheet formulas; not evaluated in-memory.
+      const values = [...orderValues, ...outcomeValues, ...formulaValues];
+      return Object.fromEntries(LEDGER_HEADERS.map((header, i) => [header, values[i] ?? '']));
+    });
   }
 }
