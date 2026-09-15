@@ -36,6 +36,7 @@ const ORDER_LINE_ITEMS = `
       lineItems(first: 250) {
         nodes {
           quantity
+          currentQuantity
           variant { inventoryItem { id } }
         }
       }
@@ -179,6 +180,7 @@ export class ShopifyAdminClient implements ShopifyWriter {
         lineItems?: {
           nodes?: Array<{
             quantity: number;
+            currentQuantity?: number | null;
             variant?: { inventoryItem?: { id: string } } | null;
           }>;
         };
@@ -190,7 +192,13 @@ export class ShopifyAdminClient implements ShopifyWriter {
       .filter((node) => node.variant?.inventoryItem?.id)
       .map((node) => ({
         inventoryItemId: node.variant!.inventoryItem!.id,
-        quantity: node.quantity,
+        // currentQuantity nets out lines removed by an order edit; quantity
+        // is the line as originally recorded. Prefer currentQuantity so an
+        // edited-off line never gets restocked (it never physically shipped
+        // in the first place) — under-restocking is a visible, fixable
+        // error, overselling is a customer-facing one. Fall back to
+        // quantity for an older API response or a null currentQuantity.
+        quantity: node.currentQuantity ?? node.quantity,
       }));
   }
 }

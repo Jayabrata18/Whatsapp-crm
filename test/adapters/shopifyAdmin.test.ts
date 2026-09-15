@@ -148,4 +148,47 @@ describe('ShopifyAdminClient', () => {
       { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
     ]);
   });
+
+  it('returns line items keyed by inventory item id, preferring currentQuantity over quantity', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({
+          data: {
+            order: {
+              lineItems: {
+                nodes: [
+                  // Edited down after the order was placed: currentQuantity should win.
+                  {
+                    quantity: 3,
+                    currentQuantity: 1,
+                    variant: { inventoryItem: { id: 'gid://shopify/InventoryItem/1' } },
+                  },
+                  // No order edit: currentQuantity is null, falls back to quantity.
+                  {
+                    quantity: 2,
+                    currentQuantity: null,
+                    variant: { inventoryItem: { id: 'gid://shopify/InventoryItem/2' } },
+                  },
+                  // Custom/no-variant line item: has no inventory item, must be filtered out.
+                  {
+                    quantity: 1,
+                    currentQuantity: 1,
+                    variant: null,
+                  },
+                ],
+              },
+            },
+          },
+        }),
+    });
+
+    const items = await client.getOrderLineItems('99');
+
+    expect(items).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/1', quantity: 1 },
+      { inventoryItemId: 'gid://shopify/InventoryItem/2', quantity: 2 },
+    ]);
+  });
 });
