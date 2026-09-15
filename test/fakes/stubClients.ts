@@ -4,12 +4,44 @@ import type { OrderTagger } from '../../src/adapters/shopifyAdmin.js';
 
 export class StubWhatsAppClient implements WhatsAppClient {
   sent: SendTemplateInput[] = [];
+  uploaded: Array<{ bytes: Buffer; filename: string; mimeType: string }> = [];
+  documentsSent: Array<{ to: string; mediaId: string; filename: string; caption?: string }> = [];
+  textsSent: Array<{ to: string; body: string }> = [];
   failWith: Error | null = null;
   private counter = 0;
 
   async sendTemplate(input: SendTemplateInput): Promise<{ wamid: string }> {
     if (this.failWith) throw this.failWith;
     this.sent.push(input);
+    this.counter += 1;
+    return { wamid: `wamid.STUB${this.counter}` };
+  }
+
+  async uploadMedia(input: {
+    bytes: Buffer;
+    filename: string;
+    mimeType: string;
+  }): Promise<{ mediaId: string }> {
+    if (this.failWith) throw this.failWith;
+    this.uploaded.push(input);
+    return { mediaId: `media.STUB${this.uploaded.length}` };
+  }
+
+  async sendDocument(input: {
+    to: string;
+    mediaId: string;
+    filename: string;
+    caption?: string;
+  }): Promise<{ wamid: string }> {
+    if (this.failWith) throw this.failWith;
+    this.documentsSent.push(input);
+    this.counter += 1;
+    return { wamid: `wamid.STUB${this.counter}` };
+  }
+
+  async sendText(input: { to: string; body: string }): Promise<{ wamid: string }> {
+    if (this.failWith) throw this.failWith;
+    this.textsSent.push(input);
     this.counter += 1;
     return { wamid: `wamid.STUB${this.counter}` };
   }
