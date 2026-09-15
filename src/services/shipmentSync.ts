@@ -145,21 +145,55 @@ export class ShipmentSyncService {
     return { checked: awbs.length, applied };
   }
 
-  /** Called once, at fulfillment time, to open the shipment record a courier status can later transition. */
+  /**
+   * Called at fulfillment time, to open the shipment record a courier status
+   * can later transition. Routed through the same `canTransition` guard as
+   * `applyShipmentStatus` — a duplicate Shopify fulfillment webhook (the kind
+   * `hasEvent`/`recordEvent` dedup elsewhere in this codebase exists precisely
+   * because they happen) must never regress a shipment that has already moved
+   * past SHIPPED. An unguarded overwrite back to SHIPPED would make a later
+   * status (e.g. DELIVERED) transition-legal again on the next poll, and the
+   * guarded effect this whole file exists to fire once would fire twice.
+   * On refusal this is loud, not silent, matching the unmapped-status branch's
+   * philosophy. When it does write, it merges onto any existing row rather
+   * than replacing it, so no timestamp already recorded is ever wiped.
+   */
   async recordFulfillment(orderNo: string, awb: string, courier: string): Promise<void> {
     const nowIso = this.now().toISOString();
+    const existing = await this.deps.store.findShipmentByAwb(awb);
+
+    if (existing && !canTransition(existing.status, 'SHIPPED')) {
+      log('warn', 'fulfillment recorded for a shipment already past SHIPPED, ignored', {
+        awb,
+        order_no: orderNo,
+        status: existing.status,
+      });
+      return;
+    }
+
+    const base: ShipmentRow = existing ?? {
+      orderNo,
+      awb,
+      courier,
+      status: 'NEW',
+      shippedAt: '',
+      ofdAt: '',
+      deliveredAt: '',
+      rtoInitiatedAt: '',
+      rtoReturnedAt: '',
+      lastSyncedAt: '',
+      rawStatus: '',
+    };
+
     await this.deps.store.upsertShipment({
+      ...base,
       orderNo,
       awb,
       courier,
       status: 'SHIPPED',
       shippedAt: nowIso,
-      ofdAt: '',
-      deliveredAt: '',
-      rtoInitiatedAt: '',
-      rtoReturnedAt: '',
-      lastSyncedAt: nowIso,
       rawStatus: 'SHIPPED',
+      lastSyncedAt: nowIso,
     });
     await this.deps.store.updateOrderFields(orderNo, { awb, fulfillmentStatus: 'SHIPPED' });
   }

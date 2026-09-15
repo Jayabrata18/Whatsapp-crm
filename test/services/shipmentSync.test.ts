@@ -198,4 +198,39 @@ describe('ShipmentSyncService', () => {
     expect(orderRow?.awb).toBe('SF1');
     expect(orderRow?.fulfillmentStatus).toBe('SHIPPED');
   });
+
+  it('a second recordFulfillment for the same AWB does not regress the row', async () => {
+    const { svc, store } = harness();
+    await svc.recordFulfillment('#1042', 'SF1', 'shadowfax');
+    await svc.applyShipmentStatus('SF1', 'DELIVERED', 'DELIVERED', AT);
+
+    // A duplicate Shopify fulfillment webhook replaying after delivery.
+    await svc.recordFulfillment('#1042', 'SF1', 'shadowfax');
+
+    const row = await store.findShipmentByAwb('SF1');
+    expect(row?.status).toBe('DELIVERED');
+    expect(row?.deliveredAt).toBe(AT);
+  });
+
+  it('a replayed fulfillment webhook cannot reopen the door to a second delivered effect', async () => {
+    // The full attack chain the guard exists to close: recordFulfillment,
+    // deliver, a duplicate recordFulfillment replay, then the poller re-sends
+    // the same DELIVERED status it already reported. Without the fix,
+    // recordFulfillment's second call regresses the row to SHIPPED, which
+    // makes SHIPPED -> DELIVERED transition-legal again and the effect fires
+    // twice. This test must fail against the pre-fix recordFulfillment.
+    const { svc, store, tracker } = harness();
+    await svc.recordFulfillment('#1042', 'SF1', 'shadowfax');
+    await svc.applyShipmentStatus('SF1', 'DELIVERED', 'DELIVERED', AT);
+
+    await svc.recordFulfillment('#1042', 'SF1', 'shadowfax'); // duplicate webhook replay
+
+    tracker.responses = [{ awb: 'SF1', status: 'DELIVERED', rawStatus: 'DELIVERED', at: AT }];
+    await svc.syncOpenShipments(); // poller re-confirms the same status
+
+    expect(store.effects.filter((e) => e.kind === 'delivered')).toHaveLength(1);
+    const row = await store.findShipmentByAwb('SF1');
+    expect(row?.status).toBe('DELIVERED');
+    expect(row?.deliveredAt).toBe(AT);
+  });
 });
