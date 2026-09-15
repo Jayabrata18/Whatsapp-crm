@@ -9,6 +9,10 @@ function graphqlOk() {
     );
 }
 
+function okJson(v: unknown) {
+  return new Response(JSON.stringify(v), { status: 200 });
+}
+
 describe('ShopifyAdminClient', () => {
   it('calls the Admin GraphQL endpoint with the access token', async () => {
     const fetchImpl = graphqlOk();
@@ -86,5 +90,62 @@ describe('ShopifyAdminClient', () => {
         'paid-early',
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it('cancels with the RTO note and no restock', async () => {
+    let body: any;
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x.myshopify.com',
+      adminToken: 't',
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(String((init as RequestInit).body));
+        return okJson({ data: { orderCancel: { userErrors: [] } } });
+      },
+    });
+
+    await client.cancelOrder('99', {
+      reason: 'OTHER',
+      restock: false,
+      note: 'user cancel, user did not take delivery or cancel the delivery',
+    });
+
+    expect(body.variables).toMatchObject({
+      orderId: 'gid://shopify/Order/99',
+      reason: 'OTHER',
+      restock: false,
+      staffNote: 'user cancel, user did not take delivery or cancel the delivery',
+    });
+  });
+
+  it('throws on a userErrors response even though HTTP was 200', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({ data: { orderCancel: { userErrors: [{ message: 'already cancelled' }] } } }),
+    });
+    await expect(
+      client.cancelOrder('99', { reason: 'OTHER', note: 'n', restock: false }),
+    ).rejects.toThrow(/already cancelled/);
+  });
+
+  it('sends one inventory delta per item', async () => {
+    let body: any;
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async (_u, init) => {
+        body = JSON.parse(String((init as RequestInit).body));
+        return okJson({ data: { inventoryAdjustQuantities: { userErrors: [] } } });
+      },
+    });
+
+    await client.adjustInventory([
+      { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
+    ]);
+
+    expect(body.variables.input.changes).toEqual([
+      { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
+    ]);
   });
 });
