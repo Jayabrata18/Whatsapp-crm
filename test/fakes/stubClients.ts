@@ -1,6 +1,7 @@
 import type { SendTemplateInput, WhatsAppClient } from '../../src/adapters/whatsapp.js';
 import type { CreateLinkInput, PaymentLinkClient } from '../../src/adapters/cashfree.js';
 import type { OrderTagger } from '../../src/adapters/shopifyAdmin.js';
+import type { ShipmentTracker, TrackedShipment } from '../../src/adapters/shadowfax.js';
 
 export class StubWhatsAppClient implements WhatsAppClient {
   sent: SendTemplateInput[] = [];
@@ -69,5 +70,16 @@ export class StubOrderTagger implements OrderTagger {
   async addTag(orderId: string, tag: string): Promise<void> {
     if (this.failWith) throw this.failWith;
     this.tagged.push({ orderId, tag });
+  }
+}
+
+/** Records every batch of AWBs it was asked to poll; returns whatever `responses` holds. */
+export class StubShipmentTracker implements ShipmentTracker {
+  requestedAwbs: string[][] = [];
+  responses: TrackedShipment[] = [];
+
+  async fetchStatuses(awbs: string[]): Promise<TrackedShipment[]> {
+    this.requestedAwbs.push([...awbs]);
+    return this.responses;
   }
 }
