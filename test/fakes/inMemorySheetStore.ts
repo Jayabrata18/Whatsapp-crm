@@ -71,6 +71,10 @@ export class InMemorySheetStore implements SheetStore {
     this.messages[index] = { ...this.messages[index]!, status };
   }
 
+  async listMessages(): Promise<MessageRow[]> {
+    return this.messages.map((row) => ({ ...row }));
+  }
+
   async hasEvent(source: EventSource, externalId: string): Promise<boolean> {
     return this.events.has(`${source}:${externalId}`);
   }

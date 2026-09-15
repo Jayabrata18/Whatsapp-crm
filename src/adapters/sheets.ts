@@ -107,6 +107,7 @@ export interface SheetStore {
   updateOrderFields(orderNo: string, patch: Partial<OrderRow>): Promise<void>;
   appendMessage(row: MessageRow): Promise<void>;
   updateMessageStatus(wamid: string, status: string): Promise<void>;
+  listMessages(): Promise<MessageRow[]>;
   /** True when this exact event was already processed. */
   hasEvent(source: EventSource, externalId: string): Promise<boolean>;
   recordEvent(source: EventSource, externalId: string): Promise<void>;

@@ -113,6 +113,17 @@ function messageRowToValues(row: MessageRow): string[] {
   return [row.orderNo, row.template, row.wamid, row.direction, row.status, row.timestamp];
 }
 
+function valuesToMessageRow(values: unknown[]): MessageRow {
+  return {
+    orderNo: str(values[0]),
+    template: str(values[1]),
+    wamid: str(values[2]),
+    direction: (str(values[3]) || 'out') as MessageRow['direction'],
+    status: str(values[4]),
+    timestamp: str(values[5]),
+  };
+}
+
 export function shipmentRowToValues(row: ShipmentRow): (string | number)[] {
   return [
     row.orderNo,
@@ -286,6 +297,11 @@ export class GoogleSheetStore implements SheetStore {
     if (index === -1) return;
     const sheetRow = index + 1;
     await this.api.updateValues(this.sheetId, `messages!E${sheetRow}:E${sheetRow}`, [[status]]);
+  }
+
+  async listMessages(): Promise<MessageRow[]> {
+    const values = await this.api.getValues(this.sheetId, MESSAGES_RANGE);
+    return values.slice(1).filter((row) => str(row[0]) !== '').map(valuesToMessageRow);
   }
 
   async hasEvent(source: EventSource, externalId: string): Promise<boolean> {

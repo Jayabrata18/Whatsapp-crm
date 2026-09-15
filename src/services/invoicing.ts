@@ -2,7 +2,7 @@ import { Mutex } from '../core/mutex.js';
 import { financialYear, formatInvoiceNumber } from '../core/invoiceNumber.js';
 import { computeGst, round2, splitTax, type GstBreakdown, type GstLine, type GstRates } from '../core/gst.js';
 import { isInterState } from '../core/placeOfSupply.js';
-import type { OrderRow, SheetStore } from '../adapters/sheets.js';
+import type { InvoiceRow, OrderRow, SheetStore } from '../adapters/sheets.js';
 import type { InvoiceData, InvoiceLine, InvoiceRenderer } from '../adapters/invoicePdf.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
 import { log } from '../logger.js';
@@ -41,67 +41,139 @@ export class InvoicingService {
   }
 
   async issueForOrder(orderNo: string): Promise<{ invoiceNo: string } | null> {
-    const order = await this.deps.store.findOrderByNo(orderNo);
-    if (!order) return null;
-    if (order.invoiceNo) return null; // already invoiced; effect retries land here
+    const exists = await this.deps.store.findOrderByNo(orderNo);
+    if (!exists) return null;
 
     /*
      * Allocation, render and rollback all happen inside the mutex. GST requires a
      * gapless series, so a failed render must return the number to the pool before
      * any other caller can allocate. See spec §5.6.
+     *
+     * The entry decision below consults what actually exists — ISSUED register rows,
+     * the order's own invoiceNo stamp, and whether the delivered message was ever sent
+     * — rather than a single flag. allocate/register/stamp/send are four separate,
+     * unbatched writes against the real Sheets adapter, so a partial failure between any
+     * two of them must leave every later stage resumable rather than stuck: a flag-only
+     * check either re-allocates a second number when the register row already landed, or
+     * returns null forever once the order is stamped even if the customer never received
+     * the document.
      */
     return this.mutex.run(async () => {
-      const issuedAt = this.now();
-      const fy = financialYear(issuedAt);
-      const seq = (await this.deps.store.lastInvoiceSequence(fy)) + 1;
-      const invoiceNo = formatInvoiceNumber(this.deps.seriesPrefix, fy, seq);
+      // Re-read inside the mutex: a concurrent call for the same order could have just
+      // finished a stage, and the decision below must be based on current state.
+      const order = await this.deps.store.findOrderByNo(orderNo);
+      if (!order) return null;
 
-      const { data, breakdown } = await this.buildInvoiceData(order, invoiceNo, issuedAt);
+      const issuedRows = (await this.deps.store.listInvoices()).filter(
+        (row) => row.orderNo === orderNo && row.status === 'ISSUED',
+      );
 
-      // Nothing is persisted until the render succeeds, so a throw here consumes
-      // no sequence number at all — the next call allocates the same one.
-      const bytes = await this.deps.renderer.render(data);
-      const { mediaId } = await this.deps.whatsapp.uploadMedia({
-        bytes, filename: `${invoiceNo.replace(/\//g, '-')}.pdf`, mimeType: 'application/pdf',
-      });
+      if (issuedRows.length > 0) {
+        return this.resume(orderNo, order, issuedRows);
+      }
 
-      // One register row per rate. Shipping folds into the row for the rate it was
-      // apportioned to, so the rate-wise taxable values here are exactly what B2CS needs.
-      const interState = isInterState(data.placeOfSupply, this.deps.seller.stateCode);
-      const byRate = new Map<number, { taxable: number; tax: number }>();
-      for (const part of [...breakdown.goods, ...breakdown.shipping]) {
-        const bucket = byRate.get(part.rate) ?? { taxable: 0, tax: 0 };
-        byRate.set(part.rate, {
-          taxable: round2(bucket.taxable + part.taxable),
-          tax: round2(bucket.tax + part.tax),
+      if (order.invoiceNo) {
+        // A number is stamped but no ISSUED row backs it — most likely every row for it
+        // was voided. There's no register entry to resume from, so this reissues fresh
+        // rather than getting stuck: a flag with nothing behind it should not block forever.
+        log('warn', 'order has an invoice number but no ISSUED register rows, reissuing', {
+          order_no: orderNo,
         });
       }
 
-      await this.deps.store.appendInvoiceLines(
-        [...byRate.entries()].sort((a, b) => a[0] - b[0]).map(([rate, sums]) => {
-          const split = splitTax(sums.tax, interState);
-          return {
-            invoiceNo, orderNo, invoiceDate: issuedAt.toISOString(),
-            placeOfSupply: data.placeOfSupply, hsn: this.deps.hsn,
-            gstRate: rate, taxableValue: sums.taxable,
-            cgst: split.cgst, sgst: split.sgst, igst: split.igst,
-            roundOff: breakdown.roundOff, invoiceTotal: breakdown.total,
-            mediaId, status: 'ISSUED' as const,
-          };
-        }),
-      );
+      return this.issueFresh(order, orderNo);
+    });
+  }
+
+  private async issueFresh(order: OrderRow, orderNo: string): Promise<{ invoiceNo: string }> {
+    const issuedAt = this.now();
+    const fy = financialYear(issuedAt);
+    const seq = (await this.deps.store.lastInvoiceSequence(fy)) + 1;
+    const invoiceNo = formatInvoiceNumber(this.deps.seriesPrefix, fy, seq);
+
+    const { data, breakdown } = await this.buildInvoiceData(order, invoiceNo, issuedAt);
+
+    // Nothing is persisted until the render succeeds, so a throw here consumes
+    // no sequence number at all — the next call allocates the same one.
+    const bytes = await this.deps.renderer.render(data);
+    const { mediaId } = await this.deps.whatsapp.uploadMedia({
+      bytes, filename: `${invoiceNo.replace(/\//g, '-')}.pdf`, mimeType: 'application/pdf',
+    });
+
+    // One register row per rate. Shipping folds into the row for the rate it was
+    // apportioned to, so the rate-wise taxable values here are exactly what B2CS needs.
+    const interState = isInterState(data.placeOfSupply, this.deps.seller.stateCode);
+    const byRate = new Map<number, { taxable: number; tax: number }>();
+    for (const part of [...breakdown.goods, ...breakdown.shipping]) {
+      const bucket = byRate.get(part.rate) ?? { taxable: 0, tax: 0 };
+      byRate.set(part.rate, {
+        taxable: round2(bucket.taxable + part.taxable),
+        tax: round2(bucket.tax + part.tax),
+      });
+    }
+
+    await this.deps.store.appendInvoiceLines(
+      [...byRate.entries()].sort((a, b) => a[0] - b[0]).map(([rate, sums]) => {
+        const split = splitTax(sums.tax, interState);
+        return {
+          invoiceNo, orderNo, invoiceDate: issuedAt.toISOString(),
+          placeOfSupply: data.placeOfSupply, hsn: this.deps.hsn,
+          gstRate: rate, taxableValue: sums.taxable,
+          cgst: split.cgst, sgst: split.sgst, igst: split.igst,
+          roundOff: breakdown.roundOff, invoiceTotal: breakdown.total,
+          mediaId, status: 'ISSUED' as const,
+        };
+      }),
+    );
+
+    // From here on the register row durably exists. A failure in either of the next two
+    // steps must not allocate a second number on retry — issueForOrder's entry check finds
+    // this row on the next call and resumes from exactly here via `resume()`.
+    await this.deps.store.updateOrderFields(orderNo, { invoiceNo });
+    await this.sendDeliveredMessage(orderNo, order, mediaId);
+
+    return { invoiceNo };
+  }
+
+  /**
+   * Reached when an ISSUED register row already exists for this order — recovers whichever
+   * of stamp/send didn't complete last time, without re-allocating or re-registering.
+   */
+  private async resume(
+    orderNo: string,
+    order: OrderRow,
+    issuedRows: InvoiceRow[],
+  ): Promise<{ invoiceNo: string } | null> {
+    const invoiceNo = issuedRows[0]!.invoiceNo;
+    const mediaId = issuedRows[0]!.mediaId;
+
+    if (!order.invoiceNo) {
       await this.deps.store.updateOrderFields(orderNo, { invoiceNo });
+    }
 
-      const { wamid } = await this.deps.whatsapp.sendTemplate({
-        to: order.phone, template: TEMPLATE_DELIVERED, languageCode: this.deps.templateLang,
-        bodyParams: [order.customerName, order.orderNo], documentHeaderMediaId: mediaId,
-      });
-      await this.deps.store.appendMessage({
-        orderNo, template: TEMPLATE_DELIVERED, wamid, direction: 'out',
-        status: 'sent', timestamp: issuedAt.toISOString(),
-      });
+    const alreadySent = (await this.deps.store.listMessages()).some(
+      (message) =>
+        message.orderNo === orderNo &&
+        message.template === TEMPLATE_DELIVERED &&
+        message.direction === 'out',
+    );
+    if (alreadySent) return null; // registered, stamped, and delivered — genuinely done
 
-      return { invoiceNo };
+    // The PDF already exists on Meta from the original attempt; re-sending reuses that
+    // mediaId rather than rendering and uploading a second copy.
+    await this.sendDeliveredMessage(orderNo, order, mediaId);
+    return { invoiceNo };
+  }
+
+  private async sendDeliveredMessage(orderNo: string, order: OrderRow, mediaId: string): Promise<void> {
+    const timestamp = this.now().toISOString();
+    const { wamid } = await this.deps.whatsapp.sendTemplate({
+      to: order.phone, template: TEMPLATE_DELIVERED, languageCode: this.deps.templateLang,
+      bodyParams: [order.customerName, order.orderNo], documentHeaderMediaId: mediaId,
+    });
+    await this.deps.store.appendMessage({
+      orderNo, template: TEMPLATE_DELIVERED, wamid, direction: 'out',
+      status: 'sent', timestamp,
     });
   }
 
@@ -134,7 +206,11 @@ export class InvoicingService {
     const shippingCharged = ledgerNumber(ledgerRow, 'shipping_charged');
     const lines = this.resolveLines(order, ledgerRow);
 
-    const breakdown = computeGst(lines, shippingCharged, order.payable, this.deps.rates);
+    // `payable` is `amount - codFee`, the discounted figure for paying early online. A COD
+    // customer hands over the full `amount` at the door, so the invoice must total `amount`
+    // for every order except the one where the customer genuinely paid the discounted sum.
+    const amountCharged = order.confirmStatus === 'PAID_EARLY' ? order.payable : order.amount;
+    const breakdown = computeGst(lines, shippingCharged, amountCharged, this.deps.rates);
     const interState = isInterState(placeOfSupply, this.deps.seller.stateCode);
     const split = splitTax(breakdown.taxTotal, interState);
 

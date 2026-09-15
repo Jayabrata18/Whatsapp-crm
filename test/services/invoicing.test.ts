@@ -3,6 +3,7 @@ import { InvoicingService, TEMPLATE_DELIVERED, type InvoicingDeps } from '../../
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
 import { StubWhatsAppClient } from '../fakes/stubClients.js';
 import { stateCodeFor } from '../../src/core/placeOfSupply.js';
+import { baseInvoice } from '../fixtures/stage1.js';
 import type { GstLine, GstRates } from '../../src/core/gst.js';
 import type { InvoiceData, InvoiceRenderer } from '../../src/adapters/invoicePdf.js';
 import type { OrderRow } from '../../src/adapters/sheets.js';
@@ -216,5 +217,74 @@ describe('InvoicingService', () => {
     expect(store.invoices[0]?.placeOfSupply).toBe(SELLER.stateCode);
     // Seller state fallback means intra-state — CGST/SGST, never IGST.
     expect(store.invoices[0]?.igst).toBe(0);
+  });
+
+  describe('amount actually charged', () => {
+    it('invoices the full amount handed over at the door for a COD order, even with a codFee configured', async () => {
+      const { svc, store } = await harness();
+      // amount (1899) stays the door figure; payable (1849) is what an EARLY-PAY discount
+      // would have been, which never applies to a COD order that pays at delivery.
+      await store.updateOrderFields('#1042', { codFee: 50, payable: 1849, confirmStatus: 'CONFIRMED' });
+      await svc.issueForOrder('#1042');
+      expect(store.invoices[0]?.invoiceTotal).toBe(1899);
+    });
+
+    it('invoices the discounted figure for a genuinely PAID_EARLY order', async () => {
+      const { svc, store } = await harness();
+      await store.updateOrderFields('#1042', { codFee: 50, payable: 1849, confirmStatus: 'PAID_EARLY' });
+      await svc.issueForOrder('#1042');
+      expect(store.invoices[0]?.invoiceTotal).toBe(1849);
+    });
+  });
+
+  describe('resuming a partially-completed issuance', () => {
+    /** Simulates a prior attempt that got as far as the register write and no further. */
+    async function seedIssuedRegisterRow(store: InMemorySheetStore, invoiceNo: string, mediaId: string) {
+      await store.appendInvoiceLines([{ ...baseInvoice, orderNo: '#1042', invoiceNo, mediaId }]);
+    }
+
+    it('recovers by stamping the order when a register row exists but the stamp never landed — does not re-allocate or re-render', async () => {
+      const { svc, store, whatsapp } = await harness();
+      await seedIssuedRegisterRow(store, 'UM/26-27/0007', 'media.PRIOR');
+      // order.invoiceNo is still '' — the updateOrderFields write is exactly what failed last time.
+
+      const result = await svc.issueForOrder('#1042');
+
+      expect(result?.invoiceNo).toBe('UM/26-27/0007');
+      expect(store.invoices).toHaveLength(1); // no second register row was written
+      expect((await store.findOrderByNo('#1042'))?.invoiceNo).toBe('UM/26-27/0007');
+      expect(whatsapp.uploaded).toHaveLength(0); // no re-render, no re-upload
+      expect(whatsapp.sent[0]).toMatchObject({ documentHeaderMediaId: 'media.PRIOR' });
+    });
+
+    it('returns null once the register row, the stamp, and the delivered message all exist — genuinely done', async () => {
+      const { svc, store, whatsapp } = await harness();
+      await seedIssuedRegisterRow(store, 'UM/26-27/0007', 'media.PRIOR');
+      await store.updateOrderFields('#1042', { invoiceNo: 'UM/26-27/0007' });
+      await store.appendMessage({
+        orderNo: '#1042', template: TEMPLATE_DELIVERED, wamid: 'wamid.PRIOR', direction: 'out',
+        status: 'sent', timestamp: '2026-09-10T00:00:00.000Z',
+      });
+
+      expect(await svc.issueForOrder('#1042')).toBeNull();
+      expect(store.invoices).toHaveLength(1);
+      expect(store.messages).toHaveLength(1); // no duplicate send
+      expect(whatsapp.sent).toHaveLength(0);
+    });
+
+    it('resends the document when the order is stamped but the delivered message never went out — does not re-allocate or re-register', async () => {
+      const { svc, store, whatsapp } = await harness();
+      await seedIssuedRegisterRow(store, 'UM/26-27/0007', 'media.PRIOR');
+      await store.updateOrderFields('#1042', { invoiceNo: 'UM/26-27/0007' });
+      // No message row exists yet — sendTemplate is exactly what failed last time.
+
+      const result = await svc.issueForOrder('#1042');
+
+      expect(result?.invoiceNo).toBe('UM/26-27/0007');
+      expect(store.invoices).toHaveLength(1);
+      expect(whatsapp.uploaded).toHaveLength(0);
+      expect(whatsapp.sent[0]).toMatchObject({ documentHeaderMediaId: 'media.PRIOR' });
+      expect(store.messages).toHaveLength(1);
+    });
   });
 });
