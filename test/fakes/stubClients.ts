@@ -1,6 +1,6 @@
 import type { SendTemplateInput, WhatsAppClient } from '../../src/adapters/whatsapp.js';
 import type { CreateLinkInput, PaymentLinkClient } from '../../src/adapters/cashfree.js';
-import type { OrderTagger } from '../../src/adapters/shopifyAdmin.js';
+import type { OrderTagger, ShopifyWriter } from '../../src/adapters/shopifyAdmin.js';
 import type { ShipmentTracker, TrackedShipment } from '../../src/adapters/shadowfax.js';
 
 export class StubWhatsAppClient implements WhatsAppClient {
@@ -70,6 +70,46 @@ export class StubOrderTagger implements OrderTagger {
   async addTag(orderId: string, tag: string): Promise<void> {
     if (this.failWith) throw this.failWith;
     this.tagged.push({ orderId, tag });
+  }
+}
+
+/** Full `ShopifyWriter` fake shared by the delivery and RTO service tests. */
+export class StubShopifyWriter implements ShopifyWriter {
+  markedPaid: string[] = [];
+  cancels: Array<{ orderId: string; reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean }> = [];
+  tags: Array<{ orderId: string; tag: string }> = [];
+  inventoryAdjustments: Array<Array<{ inventoryItemId: string; locationId: string; delta: number }>> = [];
+  lineItems: Array<{ inventoryItemId: string; quantity: number }> = [];
+  failMarkAsPaidWith: Error | null = null;
+  failAdjustWith: Error | null = null;
+
+  async addTag(orderId: string, tag: string): Promise<void> {
+    this.tags.push({ orderId, tag });
+  }
+
+  async cancelOrder(
+    orderId: string,
+    opts: { reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean },
+  ): Promise<void> {
+    this.cancels.push({ orderId, ...opts });
+  }
+
+  async markAsPaid(orderId: string): Promise<void> {
+    if (this.failMarkAsPaidWith) throw this.failMarkAsPaidWith;
+    this.markedPaid.push(orderId);
+  }
+
+  async adjustInventory(
+    items: Array<{ inventoryItemId: string; locationId: string; delta: number }>,
+  ): Promise<void> {
+    if (this.failAdjustWith) throw this.failAdjustWith;
+    this.inventoryAdjustments.push(items);
+  }
+
+  async getOrderLineItems(
+    _orderId: string,
+  ): Promise<Array<{ inventoryItemId: string; quantity: number }>> {
+    return this.lineItems;
   }
 }
 
