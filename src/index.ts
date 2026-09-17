@@ -8,6 +8,7 @@ import { ShopifyAdminClient } from './adapters/shopifyAdmin.js';
 import { OrderIntakeService } from './services/orderIntake.js';
 import { ConfirmationService } from './services/confirmation.js';
 import { CancellationService } from './services/cancellation.js';
+import { RatingService } from './services/rating.js';
 import { PaymentService } from './services/payment.js';
 import { createShopifyRouter } from './routes/shopify.js';
 import { createMetaRouter } from './routes/meta.js';
@@ -68,11 +69,20 @@ const confirmation = new ConfirmationService({
 
 const payment = new PaymentService({ store, tagger });
 
+const rating = new RatingService({
+  store,
+  whatsapp,
+  templateLang: config.templateLang,
+  ratingDelayDays: config.ratingDelayDays,
+  judgemeReviewUrl: config.judgemeReviewUrl,
+});
+
 const app = createApp({
   routers: [
     createShopifyRouter({ intake, webhookSecret: config.shopifyWebhookSecret }),
     createMetaRouter({
       confirmation,
+      rating,
       appSecret: config.metaAppSecret,
       verifyToken: config.metaVerifyToken,
     }),

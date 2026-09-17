@@ -5,6 +5,7 @@ import { createApp } from '../../src/server.js';
 import { createMetaRouter } from '../../src/routes/meta.js';
 import { ConfirmationService } from '../../src/services/confirmation.js';
 import { CancellationService } from '../../src/services/cancellation.js';
+import { RatingService } from '../../src/services/rating.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
 import { StubWhatsAppClient, StubPaymentLinkClient, StubShopifyWriter } from '../fakes/stubClients.js';
 
@@ -35,15 +36,24 @@ function build() {
     linkExpiryHours: 24,
     payEarlyEnabled: true,
   });
+  const rating = new RatingService({
+    store,
+    whatsapp,
+    templateLang: 'en',
+    ratingDelayDays: 3,
+    judgemeReviewUrl: 'https://judge.me/reviews/new',
+  });
   const app = createApp({
-    routers: [createMetaRouter({ confirmation, appSecret: APP_SECRET, verifyToken: VERIFY_TOKEN })],
+    routers: [
+      createMetaRouter({ confirmation, rating, appSecret: APP_SECRET, verifyToken: VERIFY_TOKEN }),
+    ],
   });
   const server = app.listen(0);
   const port = (server.address() as AddressInfo).port;
-  return { store, whatsapp, payments, server, base: `http://127.0.0.1:${port}/webhook/meta` };
+  return { store, whatsapp, payments, rating, server, base: `http://127.0.0.1:${port}/webhook/meta` };
 }
 
-function buttonPayload(from = '919876543210', messageId = 'wamid.IN1') {
+function buttonPayload(from = '919876543210', messageId = 'wamid.IN1', buttonText = 'I Confirm') {
   return {
     object: 'whatsapp_business_account',
     entry: [
@@ -53,7 +63,7 @@ function buttonPayload(from = '919876543210', messageId = 'wamid.IN1') {
           {
             field: 'messages',
             value: {
-              messages: [{ id: messageId, from, type: 'button', button: { text: 'I Confirm' } }],
+              messages: [{ id: messageId, from, type: 'button', button: { text: buttonText } }],
             },
           },
         ],
@@ -202,5 +212,32 @@ describe('POST /webhook/meta', () => {
     const body = JSON.stringify(payload);
     expect((await post(body, sign(body))).status).toBe(200);
     expect((await ctx.store.findOrderByNo('#1042'))?.confirmStatus).toBe('CONFIRMED');
+  });
+
+  it('routes an unrecognised button reply to the rating service', async () => {
+    // #1042 is PENDING here (not DELIVERED), so confirmation.handleEvent returns
+    // 'ignored' for this button and the router's fallback is what's under test —
+    // not confirmation matching it by coincidence.
+    await ctx.store.updateOrderFields('#1042', { fulfillmentStatus: 'DELIVERED', awb: 'AWB-1042' });
+    await ctx.store.upsertShipment({
+      orderNo: '#1042',
+      awb: 'AWB-1042',
+      courier: 'Shadowfax',
+      status: 'DELIVERED',
+      shippedAt: '2026-08-16T10:00:00.000Z',
+      ofdAt: '',
+      deliveredAt: '2026-08-16T10:00:00.000Z',
+      rtoInitiatedAt: '',
+      rtoReturnedAt: '',
+      lastSyncedAt: '2026-08-16T10:00:00.000Z',
+      rawStatus: 'DELIVERED',
+      rtoRestockedAt: '',
+    });
+
+    const body = JSON.stringify(buttonPayload('919876543210', 'wamid.RATE1', '⭐ 4–5'));
+    const res = await post(body, sign(body));
+    expect(res.status).toBe(200);
+    expect((await ctx.store.findOrderByNo('#1042'))?.rating).toBe('4-5');
+    expect(ctx.whatsapp.textsSent[0]?.body).toContain('judge.me');
   });
 });

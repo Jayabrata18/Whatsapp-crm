@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { verifyMetaSignature } from '../core/signatures.js';
 import { parseMetaWebhook } from '../core/metaWebhook.js';
 import type { ConfirmationService } from '../services/confirmation.js';
+import type { RatingService } from '../services/rating.js';
 import { log } from '../logger.js';
 
 export function createMetaRouter(deps: {
   confirmation: ConfirmationService;
+  rating: Pick<RatingService, 'handleRatingReply'>;
   appSecret: string;
   verifyToken: string;
 }): Router {
@@ -39,7 +41,13 @@ export function createMetaRouter(deps: {
     try {
       const events = parseMetaWebhook(req.body);
       for (const event of events) {
-        await deps.confirmation.handleEvent(event);
+        const result = await deps.confirmation.handleEvent(event);
+        // A button reply that isn't "I Confirm"/"Cancel Order" falls through here
+        // unhandled — the rating quick-replies are exactly that. Confirmation's own
+        // messageId dedup already guards this against a duplicate Meta delivery.
+        if (result === 'ignored' && event.kind === 'button') {
+          await deps.rating.handleRatingReply(event.from, event.buttonText);
+        }
       }
       res.status(200).json({ handled: events.length });
     } catch (error) {
