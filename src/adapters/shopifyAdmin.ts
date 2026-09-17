@@ -53,7 +53,13 @@ export interface ShopifyWriter extends OrderTagger {
     orderId: string,
     opts: { reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean },
   ): Promise<void>;
-  markAsPaid(orderId: string): Promise<void>;
+  /**
+   * `'already_paid'` means Shopify rejected the mutation because the order's financial
+   * status wasn't eligible (no positive outstanding balance / already `PAID`) — expected
+   * on a retry, and importantly, Shopify creates no second transaction for it. Every
+   * other failure still throws.
+   */
+  markAsPaid(orderId: string): Promise<'marked' | 'already_paid'>;
   adjustInventory(
     items: Array<{ inventoryItemId: string; locationId: string; delta: number }>,
   ): Promise<void>;
@@ -78,12 +84,17 @@ export class ShopifyAdminClient implements ShopifyWriter {
    * failure can hide: GraphQL answers HTTP 200 even when a mutation fails,
    * so the top-level `errors` array and the mutation's `userErrors` both
    * have to be inspected.
+   *
+   * Returns `userErrors` to the caller rather than throwing on them — most
+   * callers want the throw-on-any-userError behavior of `graphql()` below,
+   * but `markAsPaid` needs to inspect them itself to tell an expected,
+   * already-happened outcome from a genuine failure.
    */
-  private async graphql<T>(
+  private async request<T>(
     query: string,
     variables: Record<string, unknown>,
     mutationName: string,
-  ): Promise<T> {
+  ): Promise<{ data: T; userErrors: Array<{ message?: string }> }> {
     const res = await this.fetchImpl(
       `https://${this.storeDomain}/admin/api/${API_VERSION}/graphql.json`,
       {
@@ -105,16 +116,28 @@ export class ShopifyAdminClient implements ShopifyWriter {
       errors?: Array<{ message?: string }>;
     };
 
-    const mutationResult = parsed.data?.[mutationName];
-    const errors = [...(parsed.errors ?? []), ...(mutationResult?.userErrors ?? [])].map(
-      (e) => e.message ?? 'unknown error',
-    );
-
-    if (errors.length > 0) {
-      throw new Error(`Shopify ${mutationName} rejected: ${errors.join('; ')}`);
+    const topLevelErrors = parsed.errors ?? [];
+    if (topLevelErrors.length > 0) {
+      const messages = topLevelErrors.map((e) => e.message ?? 'unknown error').join('; ');
+      throw new Error(`Shopify ${mutationName} rejected: ${messages}`);
     }
 
-    return parsed.data as T;
+    const mutationResult = parsed.data?.[mutationName];
+    return { data: parsed.data as T, userErrors: mutationResult?.userErrors ?? [] };
+  }
+
+  /** `request()`, but throws on any `userErrors` too — what every mutation but `markAsPaid` wants. */
+  private async graphql<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    mutationName: string,
+  ): Promise<T> {
+    const { data, userErrors } = await this.request<T>(query, variables, mutationName);
+    if (userErrors.length > 0) {
+      const messages = userErrors.map((e) => e.message ?? 'unknown error').join('; ');
+      throw new Error(`Shopify ${mutationName} rejected: ${messages}`);
+    }
+    return data;
   }
 
   async addTag(orderId: string, tag: string): Promise<void> {
@@ -144,12 +167,26 @@ export class ShopifyAdminClient implements ShopifyWriter {
     );
   }
 
-  async markAsPaid(orderId: string): Promise<void> {
-    await this.graphql(
+  async markAsPaid(orderId: string): Promise<'marked' | 'already_paid'> {
+    const { userErrors } = await this.request(
       ORDER_MARK_AS_PAID,
       { input: { id: `gid://shopify/Order/${orderId}` } },
       'orderMarkAsPaid',
     );
+
+    if (userErrors.length === 0) return 'marked';
+
+    // Shopify's own wording when the order's financial status isn't eligible (no positive
+    // outstanding balance, or already PAID) — creates no second transaction, so a retry
+    // landing here is a no-op to treat as success, not a failure. Every other userError
+    // (e.g. an order id Shopify doesn't recognise) still has to throw.
+    const allAlreadyPaid = userErrors.every((e) =>
+      (e.message ?? '').toLowerCase().includes('cannot be marked as paid'),
+    );
+    if (allAlreadyPaid) return 'already_paid';
+
+    const messages = userErrors.map((e) => e.message ?? 'unknown error').join('; ');
+    throw new Error(`Shopify orderMarkAsPaid rejected: ${messages}`);
   }
 
   async adjustInventory(

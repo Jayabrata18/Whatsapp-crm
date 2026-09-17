@@ -82,6 +82,9 @@ export class StubShopifyWriter implements ShopifyWriter {
   lineItems: Array<{ inventoryItemId: string; quantity: number }> = [];
   failMarkAsPaidWith: Error | null = null;
   failAdjustWith: Error | null = null;
+  /** What `markAsPaid` resolves to when it doesn't throw — set to `'already_paid'` to
+   *  simulate a retry against an order Shopify already marked paid. */
+  markAsPaidResult: 'marked' | 'already_paid' = 'marked';
 
   async addTag(orderId: string, tag: string): Promise<void> {
     this.tags.push({ orderId, tag });
@@ -94,9 +97,10 @@ export class StubShopifyWriter implements ShopifyWriter {
     this.cancels.push({ orderId, ...opts });
   }
 
-  async markAsPaid(orderId: string): Promise<void> {
+  async markAsPaid(orderId: string): Promise<'marked' | 'already_paid'> {
     if (this.failMarkAsPaidWith) throw this.failMarkAsPaidWith;
     this.markedPaid.push(orderId);
+    return this.markAsPaidResult;
   }
 
   async adjustInventory(

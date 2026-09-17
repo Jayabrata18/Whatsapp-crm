@@ -61,7 +61,16 @@ export class DeliveryService {
     }
 
     if (order.isCod && !order.paidAt) {
-      await shopify.markAsPaid(order.orderId);
+      // 'already_paid' means a prior attempt's Shopify call actually landed but a later
+      // step (this write, the ledger, invoicing) failed before the effect could record
+      // success — Shopify creates no second transaction for it, so this is a retry
+      // finding its own earlier work, not a failure. Both outcomes carry on identically.
+      const result = await shopify.markAsPaid(order.orderId);
+      if (result === 'already_paid') {
+        log('info', 'order was already marked paid in Shopify on a prior attempt, continuing', {
+          order_no: orderNo,
+        });
+      }
       await store.updateOrderFields(orderNo, { paidAt: this.now().toISOString() });
     }
 

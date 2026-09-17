@@ -129,6 +129,62 @@ describe('ShopifyAdminClient', () => {
     ).rejects.toThrow(/already cancelled/);
   });
 
+  it('resolves "marked" when orderMarkAsPaid succeeds with no userErrors', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () => okJson({ data: { orderMarkAsPaid: { userErrors: [] } } }),
+    });
+    await expect(client.markAsPaid('99')).resolves.toBe('marked');
+  });
+
+  it('resolves "already_paid" instead of throwing when Shopify says the order cannot be marked as paid', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({
+          data: {
+            orderMarkAsPaid: {
+              userErrors: [{ field: ['id'], message: 'Order cannot be marked as paid.' }],
+            },
+          },
+        }),
+    });
+    await expect(client.markAsPaid('99')).resolves.toBe('already_paid');
+  });
+
+  it('still throws on a userErrors response that is not the already-paid case', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({ data: { orderMarkAsPaid: { userErrors: [{ message: 'Order not found' }] } } }),
+    });
+    await expect(client.markAsPaid('99')).rejects.toThrow(/Order not found/);
+  });
+
+  it('throws when even one userError among several is not the already-paid case', async () => {
+    // Guards against a loose check that treats "any already-paid message present" as
+    // success — every userError must qualify, or this has to stay loud.
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({
+          data: {
+            orderMarkAsPaid: {
+              userErrors: [
+                { message: 'Order cannot be marked as paid.' },
+                { message: 'Something else went wrong' },
+              ],
+            },
+          },
+        }),
+    });
+    await expect(client.markAsPaid('99')).rejects.toThrow(/Something else went wrong/);
+  });
+
   it('sends one inventory delta per item', async () => {
     let body: any;
     const client = new ShopifyAdminClient({

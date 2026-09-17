@@ -97,6 +97,16 @@ describe('RtoService', () => {
     expect(shopify.tags).toEqual([{ orderId: '99', tag: 'rto' }]);
   });
 
+  it('cancels with the exact staff note text the owner asked for', async () => {
+    // Comparing against RTO_CANCEL_NOTE (as the test above does) would still pass if a typo
+    // crept into the constant's own definition — this pins the literal text itself.
+    const { svc, shopify } = await harness();
+    await svc.onRtoInitiated('#1042');
+    expect(shopify.cancels[0]?.note).toBe(
+      'user cancel, user did not take delivery or cancel the delivery',
+    );
+  });
+
   it('sends the cancellation message with RTO as the reason', async () => {
     const { svc, whatsapp } = await harness();
     await svc.onRtoInitiated('#1042');

@@ -55,6 +55,7 @@ interface HarnessOpts {
   paidAt?: string;
   confirmStatus?: ConfirmStatus;
   invoicingThrows?: boolean;
+  markAsPaidResult?: 'marked' | 'already_paid';
 }
 
 async function harness(opts: HarnessOpts = {}) {
@@ -88,6 +89,7 @@ async function harness(opts: HarnessOpts = {}) {
   );
 
   const shopify = new StubShopifyWriter();
+  shopify.markAsPaidResult = opts.markAsPaidResult ?? 'marked';
   const invoicing = new StubInvoicingService();
   if (opts.invoicingThrows) invoicing.throwWith = new Error('invoicing boom');
 
@@ -172,5 +174,23 @@ describe('DeliveryService', () => {
     });
     await svc.onDelivered('#1042');
     expect(store.ledger[0]).toMatchObject({ collectedAmount: 1849, platformFee: 92.45 });
+  });
+
+  it('completes the whole delivered flow on a retry against an order Shopify already marked paid', async () => {
+    // Mirrors a real retry: a prior attempt's markAsPaid call actually landed in Shopify,
+    // but a later step (this write, the ledger, invoicing) failed before that attempt
+    // finished, so the effect queue re-runs onDelivered from the top. Shopify's own
+    // markAsPaid mutation creates no second transaction here and resolves 'already_paid'
+    // instead of throwing — this must not stall the rest of the sequence.
+    const { svc, store, shopify, invoicing } = await harness({
+      isCod: true,
+      markAsPaidResult: 'already_paid',
+    });
+    await svc.onDelivered('#1042');
+
+    expect(shopify.markedPaid).toEqual(['99']); // the call still happens on every attempt
+    expect((await store.findOrderByNo('#1042'))?.paidAt).toBe(NOW.toISOString());
+    expect(store.ledger[0]).toMatchObject({ outcome: 'DELIVERED' });
+    expect(invoicing.issued).toEqual(['#1042']);
   });
 });
