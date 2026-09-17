@@ -24,6 +24,7 @@ function build() {
     payments,
     templateLang: 'en',
     linkExpiryHours: 24,
+    payEarlyEnabled: true,
   });
   const app = createApp({
     routers: [createMetaRouter({ confirmation, appSecret: APP_SECRET, verifyToken: VERIFY_TOKEN })],

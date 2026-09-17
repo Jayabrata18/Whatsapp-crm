@@ -49,6 +49,7 @@ const confirmation = new ConfirmationService({
   payments,
   templateLang: config.templateLang,
   linkExpiryHours: 24,
+  payEarlyEnabled: config.payEarlyEnabled,
 });
 
 const tagger = new ShopifyAdminClient({

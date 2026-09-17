@@ -34,7 +34,7 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
   };
 }
 
-function build() {
+function build(overrides: { payEarlyEnabled?: boolean } = {}) {
   const store = new InMemorySheetStore();
   const whatsapp = new StubWhatsAppClient();
   const payments = new StubPaymentLinkClient();
@@ -44,6 +44,7 @@ function build() {
     payments,
     templateLang: 'en',
     linkExpiryHours: 24,
+    payEarlyEnabled: overrides.payEarlyEnabled ?? true,
     now: () => NOW,
   });
   return { store, whatsapp, payments, service };
@@ -192,5 +193,41 @@ describe('ConfirmationService', () => {
     ctx.payments.failWith = new Error('Cashfree 503');
     await expect(ctx.service.handleEvent(confirmEvent)).rejects.toThrow('Cashfree 503');
     expect((await ctx.store.findOrderByNo('#1042'))?.confirmStatus).toBe('CONFIRMED');
+  });
+});
+
+describe('ConfirmationService with pay-early disabled', () => {
+  let ctx: ReturnType<typeof build>;
+  beforeEach(async () => {
+    ctx = build({ payEarlyEnabled: false });
+    await ctx.store.appendOrder(order());
+  });
+
+  it('still confirms the order and stamps confirmedAt', async () => {
+    expect(await ctx.service.handleEvent(confirmEvent)).toBe('confirmed');
+    const row = await ctx.store.findOrderByNo('#1042');
+    expect(row?.confirmStatus).toBe('CONFIRMED');
+    expect(row?.confirmedAt).toBe(NOW.toISOString());
+  });
+
+  it('creates no payment link', async () => {
+    await ctx.service.handleEvent(confirmEvent);
+    expect(ctx.payments.created).toHaveLength(0);
+  });
+
+  it('sends no pay_early_link template', async () => {
+    await ctx.service.handleEvent(confirmEvent);
+    expect(ctx.whatsapp.sent).toHaveLength(0);
+  });
+
+  it('leaves paymentLink blank on the order row', async () => {
+    await ctx.service.handleEvent(confirmEvent);
+    const row = await ctx.store.findOrderByNo('#1042');
+    expect(row?.paymentLink).toBe('');
+  });
+
+  it('does not throw even with a payment client that would fail on blank Cashfree credentials', async () => {
+    ctx.payments.failWith = new Error('Cashfree 401 invalid credentials');
+    await expect(ctx.service.handleEvent(confirmEvent)).resolves.toBe('confirmed');
   });
 });

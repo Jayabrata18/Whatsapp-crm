@@ -20,6 +20,7 @@ export interface ConfirmationDeps {
   payments: PaymentLinkClient;
   templateLang: string;
   linkExpiryHours: number;
+  payEarlyEnabled: boolean;
   now?: () => Date;
 }
 
@@ -91,6 +92,13 @@ export class ConfirmationService {
       confirmStatus: 'CONFIRMED',
       confirmedAt: timestamp,
     });
+
+    if (!this.deps.payEarlyEnabled) {
+      log('info', 'early payment disabled, skipping payment link', {
+        order_no: order.orderNo,
+      });
+      return 'confirmed';
+    }
 
     // The amount comes from the row written at intake, never recomputed here:
     // the customer was quoted that number in the confirmation message, and the
