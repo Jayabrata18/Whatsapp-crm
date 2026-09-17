@@ -147,6 +147,19 @@ describe('CancellationService', () => {
     expect(whatsapp.sent).toHaveLength(1);
   });
 
+  it('does not cancel or message twice on two genuinely concurrent approve() calls', async () => {
+    // Neither call is awaited before the other starts — two dashboard tabs, or one
+    // double-click firing two requests before either resolves. Without a lock, both
+    // could read cancelStatus === 'REVIEW_PENDING' before either write lands.
+    const { svc, shopify, whatsapp } = await harness();
+    await svc.queueForReview('#1042', 'CUSTOMER_REQUEST');
+
+    await Promise.all([svc.approve('#1042'), svc.approve('#1042')]);
+
+    expect(shopify.cancels).toHaveLength(1);
+    expect(whatsapp.sent).toHaveLength(1);
+  });
+
   it('completes the whole sequence on a retry that finds Shopify already cancelled', async () => {
     // Simulates a retry landing after a prior attempt's Shopify cancel succeeded but the
     // cancelStatus write failed before it could land: cancelStatus is still

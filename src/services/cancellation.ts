@@ -2,6 +2,7 @@ import type { ShopifyWriter } from '../adapters/shopifyAdmin.js';
 import type { OrderRow, SheetStore } from '../adapters/sheets.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
 import { TEMPLATE_CANCELLED } from './rto.js';
+import { Mutex } from '../core/mutex.js';
 import { log } from '../logger.js';
 
 export interface CancellationDeps {
@@ -22,6 +23,7 @@ export interface CancellationDeps {
  */
 export class CancellationService {
   private readonly now: () => Date;
+  private readonly mutex = new Mutex();
 
   constructor(private readonly deps: CancellationDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -53,6 +55,16 @@ export class CancellationService {
    * call from the dashboard) can't cancel twice or send two messages: once this
    * completes, `cancelStatus` moves to `CANCELLED` and a second call is a no-op.
    *
+   * That guard alone isn't enough against two genuinely *concurrent* calls, though:
+   * this is the only operator-facing HTTP entry point in the system (unlike the RTO/
+   * delivery effect paths, which `EffectService.drain()` already serialises one at a
+   * time within a process), so two dashboard tabs — or one double-click firing two
+   * requests before either resolves — can both read `REVIEW_PENDING` before either
+   * writes. The whole body runs inside a `Mutex` (the same tool `InvoicingService`
+   * uses to guard its gapless invoice series) so the guard-read and the writes are
+   * atomic; effective in-process because this service deploys with
+   * `--max-instances=1`, the same reasoning that makes it sufficient there.
+   *
    * Nothing shipped for a customer-initiated cancel, so — unlike an RTO cancel,
    * which passes `restock: false` because the goods are still in transit back —
    * this passes `restock: true`: cancel-time restock is correct here.
@@ -73,56 +85,61 @@ export class CancellationService {
    * sequence.
    */
   async approve(orderNo: string): Promise<void> {
-    const { store, shopify, whatsapp, templateLang } = this.deps;
+    return this.mutex.run(async () => {
+      const { store, shopify, whatsapp, templateLang } = this.deps;
 
-    const order = await store.findOrderByNo(orderNo);
-    if (!order || order.cancelStatus !== 'REVIEW_PENDING') {
-      return;
-    }
+      // Re-read inside the mutex: a concurrent call for this order could have just
+      // finished while this call was waiting for the lock, and the guard below must
+      // be based on current state, not a value read before the lock was acquired.
+      const order = await store.findOrderByNo(orderNo);
+      if (!order || order.cancelStatus !== 'REVIEW_PENDING') {
+        return;
+      }
 
-    const result = await shopify.cancelOrder(order.orderId, {
-      reason: 'CUSTOMER',
-      note: 'customer cancelled',
-      restock: true,
-    });
-    if (result === 'already_cancelled') {
-      log('info', 'order was already cancelled in Shopify on a prior attempt, continuing', {
-        order_no: orderNo,
+      const result = await shopify.cancelOrder(order.orderId, {
+        reason: 'CUSTOMER',
+        note: 'customer cancelled',
+        restock: true,
       });
-    }
+      if (result === 'already_cancelled') {
+        log('info', 'order was already cancelled in Shopify on a prior attempt, continuing', {
+          order_no: orderNo,
+        });
+      }
 
-    await store.updateOrderFields(orderNo, { cancelStatus: 'CANCELLED' });
+      await store.updateOrderFields(orderNo, { cancelStatus: 'CANCELLED' });
 
-    // No money moved through the gateway and no invoice was ever raised for an order
-    // that never shipped, so — exactly like an RTO outcome — the taxable/GST fields
-    // stay at 0: there is no real tax event here to report.
-    await store.updateLedgerOutcome(orderNo, {
-      taxableValue: 0,
-      gstRate: 0,
-      gstOnGoods: 0,
-      gstOnShipping: 0,
-      outcome: 'CANCELLED',
-      collectedAmount: 0,
-      platformFee: 0,
-    });
+      // No money moved through the gateway and no invoice was ever raised for an order
+      // that never shipped, so — exactly like an RTO outcome — the taxable/GST fields
+      // stay at 0: there is no real tax event here to report.
+      await store.updateLedgerOutcome(orderNo, {
+        taxableValue: 0,
+        gstRate: 0,
+        gstOnGoods: 0,
+        gstOnShipping: 0,
+        outcome: 'CANCELLED',
+        collectedAmount: 0,
+        platformFee: 0,
+      });
 
-    const alreadySent = (await store.listMessages()).some(
-      (message) =>
-        message.orderNo === orderNo &&
-        message.template === TEMPLATE_CANCELLED &&
-        message.direction === 'out',
-    );
-    if (alreadySent) return;
+      const alreadySent = (await store.listMessages()).some(
+        (message) =>
+          message.orderNo === orderNo &&
+          message.template === TEMPLATE_CANCELLED &&
+          message.direction === 'out',
+      );
+      if (alreadySent) return;
 
-    const timestamp = this.now().toISOString();
-    const { wamid } = await whatsapp.sendTemplate({
-      to: order.phone,
-      template: TEMPLATE_CANCELLED,
-      languageCode: templateLang,
-      bodyParams: [order.customerName, order.orderNo, 'cancelled at your request'],
-    });
-    await store.appendMessage({
-      orderNo, template: TEMPLATE_CANCELLED, wamid, direction: 'out', status: 'sent', timestamp,
+      const timestamp = this.now().toISOString();
+      const { wamid } = await whatsapp.sendTemplate({
+        to: order.phone,
+        template: TEMPLATE_CANCELLED,
+        languageCode: templateLang,
+        bodyParams: [order.customerName, order.orderNo, 'cancelled at your request'],
+      });
+      await store.appendMessage({
+        orderNo, template: TEMPLATE_CANCELLED, wamid, direction: 'out', status: 'sent', timestamp,
+      });
     });
   }
 }
