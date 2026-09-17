@@ -49,10 +49,16 @@ export interface OrderTagger {
 }
 
 export interface ShopifyWriter extends OrderTagger {
+  /**
+   * `'already_cancelled'` means Shopify rejected the mutation because the order was
+   * already cancelled — expected on a retry that lands after a prior attempt's cancel
+   * actually succeeded but a later step (the sheet write, the message send) failed
+   * first. Every other failure still throws. Mirrors `markAsPaid`'s `'already_paid'`.
+   */
   cancelOrder(
     orderId: string,
     opts: { reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean },
-  ): Promise<void>;
+  ): Promise<'cancelled' | 'already_cancelled'>;
   /**
    * `'already_paid'` means Shopify rejected the mutation because the order's financial
    * status wasn't eligible (no positive outstanding balance / already `PAID`) — expected
@@ -151,8 +157,8 @@ export class ShopifyAdminClient implements ShopifyWriter {
   async cancelOrder(
     orderId: string,
     opts: { reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean },
-  ): Promise<void> {
-    await this.graphql(
+  ): Promise<'cancelled' | 'already_cancelled'> {
+    const { userErrors } = await this.request(
       ORDER_CANCEL,
       {
         orderId: `gid://shopify/Order/${orderId}`,
@@ -165,6 +171,24 @@ export class ShopifyAdminClient implements ShopifyWriter {
       },
       'orderCancel',
     );
+
+    if (userErrors.length === 0) return 'cancelled';
+
+    // Shopify rejects a cancel against an order that's already cancelled — expected on
+    // a retry that lands after a prior attempt's cancel already succeeded, and no second
+    // cancellation happens, so this is a no-op to treat as success. Matched on both
+    // "already" and "cancel" rather than one exact phrase: the precise wording at our
+    // pinned API version isn't independently confirmed, and community reports show
+    // Shopify doesn't always phrase this consistently. Every other userError (e.g. an
+    // order id Shopify doesn't recognise) still has to throw.
+    const allAlreadyCancelled = userErrors.every((e) => {
+      const message = (e.message ?? '').toLowerCase();
+      return message.includes('already') && message.includes('cancel');
+    });
+    if (allAlreadyCancelled) return 'already_cancelled';
+
+    const messages = userErrors.map((e) => e.message ?? 'unknown error').join('; ');
+    throw new Error(`Shopify orderCancel rejected: ${messages}`);
   }
 
   async markAsPaid(orderId: string): Promise<'marked' | 'already_paid'> {

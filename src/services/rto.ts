@@ -32,9 +32,11 @@ export class RtoService {
    * The effect queue that calls this retries the *whole handler* on failure, not
    * individual steps, so every step here is guarded on state actually observed
    * rather than assumed not to have run yet:
-   *   - cancel only fires if the order isn't already `CANCELLED` — Shopify has no
-   *     "cancel an already-cancelled order" no-op, so calling it twice would error
-   *     and strand the retry here forever.
+   *   - cancel is skipped outright if our own sheet already says `CANCELLED`. If a
+   *     retry lands after Shopify's cancel succeeded but before that sheet write
+   *     landed, `cancelOrder` still gets called again — but it resolves
+   *     `'already_cancelled'` rather than throwing (mirroring `markAsPaid`'s
+   *     `'already_paid'`), so this no longer strands the retry here.
    *   - tag and the ledger write are naturally idempotent (re-tagging is a no-op;
    *     the ledger write repeats the same K–Q values), so they always run.
    *   - the message send is guarded by the message log, which doubles as the record
@@ -51,11 +53,16 @@ export class RtoService {
     }
 
     if (order.cancelStatus !== 'CANCELLED') {
-      await shopify.cancelOrder(order.orderId, {
+      const result = await shopify.cancelOrder(order.orderId, {
         reason: 'OTHER',
         note: RTO_CANCEL_NOTE,
         restock: false,
       });
+      if (result === 'already_cancelled') {
+        log('info', 'order was already cancelled in Shopify on a prior attempt, continuing', {
+          order_no: orderNo,
+        });
+      }
     }
 
     await shopify.addTag(order.orderId, 'rto');

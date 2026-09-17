@@ -146,4 +146,38 @@ describe('CancellationService', () => {
     expect(shopify.cancels).toHaveLength(1);
     expect(whatsapp.sent).toHaveLength(1);
   });
+
+  it('completes the whole sequence on a retry that finds Shopify already cancelled', async () => {
+    // Simulates a retry landing after a prior attempt's Shopify cancel succeeded but the
+    // cancelStatus write failed before it could land: cancelStatus is still
+    // REVIEW_PENDING, so approve() runs again and calls cancelOrder a second time.
+    // Shopify now rejects it as already-cancelled — resolved as 'already_cancelled'
+    // rather than thrown — and the retry must still finish the rest of the sequence
+    // instead of leaving the order stuck in the review queue forever.
+    const { svc, store, shopify, whatsapp } = await harness();
+    await store.appendLedgerOrder(
+      {
+        orderNo: '#1042',
+        orderDate: '2026-09-01',
+        pincode: '700001',
+        state: 'West Bengal',
+        posCode: '19',
+        skus: 'TEE-BLK-L x1',
+        itemAmount: 1800,
+        shippingCharged: 99,
+        grossAmount: 1899,
+        isCod: true,
+      },
+      25,
+    );
+    await svc.queueForReview('#1042', 'CUSTOMER_REQUEST');
+    shopify.cancelOrderResult = 'already_cancelled';
+
+    await svc.approve('#1042');
+
+    expect(shopify.cancels).toHaveLength(1); // the call was made, and correctly not treated as an error
+    expect((await store.findOrderByNo('#1042'))?.cancelStatus).toBe('CANCELLED');
+    expect(store.ledger[0]).toMatchObject({ outcome: 'CANCELLED' });
+    expect(whatsapp.sent).toHaveLength(1);
+  });
 });

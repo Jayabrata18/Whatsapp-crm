@@ -245,5 +245,25 @@ describe('RtoService', () => {
       expect(whatsapp.sent).toHaveLength(1); // sent exactly once, on the retry
       expect(store.messages.filter((m) => m.template === TEMPLATE_CANCELLED)).toHaveLength(1);
     });
+
+    it('completes the whole sequence when a retry finds Shopify already cancelled', async () => {
+      // Simulates a retry landing after a prior attempt's Shopify cancel succeeded but
+      // the order-field write (cancelStatus: 'CANCELLED') failed before it landed:
+      // cancelStatus is still whatever it was before (not 'CANCELLED'), so the guard
+      // calls cancelOrder again. Shopify now rejects it as already-cancelled —
+      // resolved as 'already_cancelled' rather than thrown — and the retry must still
+      // finish tagging, the order-field write, the ledger write, and the send.
+      const { svc, store, shopify, whatsapp } = await harness();
+      shopify.cancelOrderResult = 'already_cancelled';
+
+      await svc.onRtoInitiated('#1042');
+
+      expect(shopify.cancels).toHaveLength(1); // the call was made, and correctly not treated as an error
+      expect(shopify.tags).toEqual([{ orderId: '99', tag: 'rto' }]);
+      const row = await store.findOrderByNo('#1042');
+      expect(row).toMatchObject({ cancelStatus: 'CANCELLED', cancelReason: 'RTO', confirmStatus: 'CANCELLED' });
+      expect(store.ledger[0]).toMatchObject({ outcome: 'RTO' });
+      expect(whatsapp.sent).toHaveLength(1);
+    });
   });
 });

@@ -60,14 +60,17 @@ export class CancellationService {
    * The send itself is additionally guarded by the message log (the same shape
    * `RtoService.onRtoInitiated` uses), so a retry that lands after the Shopify
    * cancel and the sheet writes already succeeded doesn't double-message the
-   * customer. Note the narrower gap this does NOT close, shared with
-   * `onRtoInitiated`: a failure between the Shopify cancel succeeding and the
-   * `cancelStatus: 'CANCELLED'` write landing would leave `cancelStatus` at
-   * `REVIEW_PENDING`, so a retry would call `cancelOrder` again against an
-   * order Shopify already cancelled and throw. Accepted for the same reason
-   * it's accepted there: it strands the retry loudly (an error) rather than
-   * silently double-acting, and closing it needs the same idempotency-key
-   * support tracked against the Shopify API version bump.
+   * customer.
+   *
+   * A retry can also land in between: the Shopify cancel succeeds, but the
+   * `cancelStatus: 'CANCELLED'` write fails before it lands, leaving
+   * `cancelStatus` at `REVIEW_PENDING`. Without care, a retry would then call
+   * `cancelOrder` a second time against an order Shopify already cancelled and
+   * throw, stranding the order in the review queue forever with no way out.
+   * `cancelOrder` resolves `'already_cancelled'` for exactly that case instead
+   * of throwing (mirroring `markAsPaid`'s `'already_paid'`), so this treats
+   * both outcomes as "Shopify is cancelled" and carries on to the rest of the
+   * sequence.
    */
   async approve(orderNo: string): Promise<void> {
     const { store, shopify, whatsapp, templateLang } = this.deps;
@@ -77,11 +80,16 @@ export class CancellationService {
       return;
     }
 
-    await shopify.cancelOrder(order.orderId, {
+    const result = await shopify.cancelOrder(order.orderId, {
       reason: 'CUSTOMER',
       note: 'customer cancelled',
       restock: true,
     });
+    if (result === 'already_cancelled') {
+      log('info', 'order was already cancelled in Shopify on a prior attempt, continuing', {
+        order_no: orderNo,
+      });
+    }
 
     await store.updateOrderFields(orderNo, { cancelStatus: 'CANCELLED' });
 

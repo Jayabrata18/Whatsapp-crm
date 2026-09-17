@@ -92,7 +92,7 @@ describe('ShopifyAdminClient', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('cancels with the RTO note and no restock', async () => {
+  it('cancels with the RTO note and no restock, resolving "cancelled" on success', async () => {
     let body: any;
     const client = new ShopifyAdminClient({
       storeDomain: 'x.myshopify.com',
@@ -103,11 +103,13 @@ describe('ShopifyAdminClient', () => {
       },
     });
 
-    await client.cancelOrder('99', {
-      reason: 'OTHER',
-      restock: false,
-      note: 'user cancel, user did not take delivery or cancel the delivery',
-    });
+    await expect(
+      client.cancelOrder('99', {
+        reason: 'OTHER',
+        restock: false,
+        note: 'user cancel, user did not take delivery or cancel the delivery',
+      }),
+    ).resolves.toBe('cancelled');
 
     expect(body.variables).toMatchObject({
       orderId: 'gid://shopify/Order/99',
@@ -122,11 +124,53 @@ describe('ShopifyAdminClient', () => {
       storeDomain: 'x',
       adminToken: 't',
       fetchImpl: async () =>
-        okJson({ data: { orderCancel: { userErrors: [{ message: 'already cancelled' }] } } }),
+        okJson({ data: { orderCancel: { userErrors: [{ message: 'Order not found' }] } } }),
     });
     await expect(
       client.cancelOrder('99', { reason: 'OTHER', note: 'n', restock: false }),
-    ).rejects.toThrow(/already cancelled/);
+    ).rejects.toThrow(/Order not found/);
+  });
+
+  it('resolves "already_cancelled" instead of throwing when Shopify says the order is already cancelled', async () => {
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({
+          data: {
+            orderCancel: {
+              userErrors: [{ field: ['id'], message: 'Order is already cancelled.' }],
+            },
+          },
+        }),
+    });
+    await expect(
+      client.cancelOrder('99', { reason: 'OTHER', note: 'n', restock: false }),
+    ).resolves.toBe('already_cancelled');
+  });
+
+  it('throws when even one userError among several is not the already-cancelled case', async () => {
+    // Guards against a loose check that treats "any already-cancelled message present" as
+    // success — every userError must qualify, or this has to stay loud. Mirrors the
+    // equivalent markAsPaid test.
+    const client = new ShopifyAdminClient({
+      storeDomain: 'x',
+      adminToken: 't',
+      fetchImpl: async () =>
+        okJson({
+          data: {
+            orderCancel: {
+              userErrors: [
+                { message: 'Order is already cancelled.' },
+                { message: 'Something else went wrong' },
+              ],
+            },
+          },
+        }),
+    });
+    await expect(
+      client.cancelOrder('99', { reason: 'OTHER', note: 'n', restock: false }),
+    ).rejects.toThrow(/Something else went wrong/);
   });
 
   it('resolves "marked" when orderMarkAsPaid succeeds with no userErrors', async () => {
