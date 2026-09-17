@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ConfirmationService } from '../../src/services/confirmation.js';
+import { CancellationService } from '../../src/services/cancellation.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
-import { StubWhatsAppClient, StubPaymentLinkClient } from '../fakes/stubClients.js';
+import { StubWhatsAppClient, StubPaymentLinkClient, StubShopifyWriter } from '../fakes/stubClients.js';
 import type { OrderRow } from '../../src/adapters/sheets.js';
 import type { MetaEvent } from '../../src/core/metaWebhook.js';
 
@@ -38,16 +39,25 @@ function build(overrides: { payEarlyEnabled?: boolean } = {}) {
   const store = new InMemorySheetStore();
   const whatsapp = new StubWhatsAppClient();
   const payments = new StubPaymentLinkClient();
+  const shopify = new StubShopifyWriter();
+  const cancellation = new CancellationService({
+    store,
+    shopify,
+    whatsapp,
+    templateLang: 'en',
+    now: () => NOW,
+  });
   const service = new ConfirmationService({
     store,
     whatsapp,
     payments,
+    cancellation,
     templateLang: 'en',
     linkExpiryHours: 24,
     payEarlyEnabled: overrides.payEarlyEnabled ?? true,
     now: () => NOW,
   });
-  return { store, whatsapp, payments, service };
+  return { store, whatsapp, payments, shopify, cancellation, service };
 }
 
 const confirmEvent: MetaEvent = {
@@ -147,16 +157,21 @@ describe('ConfirmationService', () => {
     expect(ctx.whatsapp.sent).toHaveLength(0);
   });
 
-  it('handles Cancel Order by marking CANCELLED with no payment link', async () => {
+  it('queues a cancel button reply for review rather than cancelling outright', async () => {
     const cancel: MetaEvent = {
       ...confirmEvent,
       messageId: 'wamid.CAN',
       buttonText: 'Cancel Order',
     };
     expect(await ctx.service.handleEvent(cancel)).toBe('cancelled');
-    expect((await ctx.store.findOrderByNo('#1042'))?.confirmStatus).toBe('CANCELLED');
+    const order = await ctx.store.findOrderByNo('#1042');
+    expect(order?.confirmStatus).toBe('CANCELLED');
+    expect(order?.cancelStatus).toBe('REVIEW_PENDING');
     expect(ctx.payments.created).toHaveLength(0);
     expect(ctx.whatsapp.sent).toHaveLength(0);
+    // Not just "no template sent" (that's true while queued regardless of whether
+    // Shopify was touched) — pin that queueing never reaches Shopify either.
+    expect(ctx.shopify.cancels).toEqual([]);
   });
 
   it('records delivery statuses against the message log', async () => {

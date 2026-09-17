@@ -4,8 +4,9 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from '../../src/server.js';
 import { createMetaRouter } from '../../src/routes/meta.js';
 import { ConfirmationService } from '../../src/services/confirmation.js';
+import { CancellationService } from '../../src/services/cancellation.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
-import { StubWhatsAppClient, StubPaymentLinkClient } from '../fakes/stubClients.js';
+import { StubWhatsAppClient, StubPaymentLinkClient, StubShopifyWriter } from '../fakes/stubClients.js';
 
 const APP_SECRET = 'meta-app-secret';
 const VERIFY_TOKEN = 'my-verify-token';
@@ -18,10 +19,18 @@ function build() {
   const store = new InMemorySheetStore();
   const whatsapp = new StubWhatsAppClient();
   const payments = new StubPaymentLinkClient();
+  const shopify = new StubShopifyWriter();
+  const cancellation = new CancellationService({
+    store,
+    shopify,
+    whatsapp,
+    templateLang: 'en',
+  });
   const confirmation = new ConfirmationService({
     store,
     whatsapp,
     payments,
+    cancellation,
     templateLang: 'en',
     linkExpiryHours: 24,
     payEarlyEnabled: true,

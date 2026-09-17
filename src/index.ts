@@ -7,6 +7,7 @@ import { CashfreeClient } from './adapters/cashfree.js';
 import { ShopifyAdminClient } from './adapters/shopifyAdmin.js';
 import { OrderIntakeService } from './services/orderIntake.js';
 import { ConfirmationService } from './services/confirmation.js';
+import { CancellationService } from './services/cancellation.js';
 import { PaymentService } from './services/payment.js';
 import { createShopifyRouter } from './routes/shopify.js';
 import { createMetaRouter } from './routes/meta.js';
@@ -43,18 +44,26 @@ const payments = new CashfreeClient({
   env: config.cashfreeEnv,
 });
 
+const tagger = new ShopifyAdminClient({
+  storeDomain: config.shopifyStoreDomain,
+  adminToken: config.shopifyAdminToken,
+});
+
+const cancellation = new CancellationService({
+  store,
+  shopify: tagger,
+  whatsapp,
+  templateLang: config.templateLang,
+});
+
 const confirmation = new ConfirmationService({
   store,
   whatsapp,
   payments,
+  cancellation,
   templateLang: config.templateLang,
   linkExpiryHours: 24,
   payEarlyEnabled: config.payEarlyEnabled,
-});
-
-const tagger = new ShopifyAdminClient({
-  storeDomain: config.shopifyStoreDomain,
-  adminToken: config.shopifyAdminToken,
 });
 
 const payment = new PaymentService({ store, tagger });

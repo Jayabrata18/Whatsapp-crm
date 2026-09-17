@@ -2,6 +2,7 @@ import { matchesCancel, matchesConfirm, type MetaEvent } from '../core/metaWebho
 import type { SheetStore } from '../adapters/sheets.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
 import type { PaymentLinkClient } from '../adapters/cashfree.js';
+import type { CancellationService } from './cancellation.js';
 import { log } from '../logger.js';
 
 export type ConfirmResult =
@@ -18,6 +19,7 @@ export interface ConfirmationDeps {
   store: SheetStore;
   whatsapp: WhatsAppClient;
   payments: PaymentLinkClient;
+  cancellation: Pick<CancellationService, 'queueForReview'>;
   templateLang: string;
   linkExpiryHours: number;
   payEarlyEnabled: boolean;
@@ -83,8 +85,11 @@ export class ConfirmationService {
     });
 
     if (isCancel) {
-      await store.updateOrderFields(order.orderNo, { confirmStatus: 'CANCELLED' });
-      log('info', 'order cancelled by customer', { order_no: order.orderNo });
+      // Queued for operator review, not cancelled outright: the button reply only
+      // marks the order and stops here — no Shopify call, no customer message —
+      // until an operator approves it via `CancellationService.approve`.
+      await this.deps.cancellation.queueForReview(order.orderNo, 'CUSTOMER_REQUEST');
+      log('info', 'order cancellation queued for review', { order_no: order.orderNo });
       return 'cancelled';
     }
 
