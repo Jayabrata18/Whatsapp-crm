@@ -139,4 +139,48 @@ describe('RtoService', () => {
     await expect(svc.onRtoReturned('#1042')).rejects.toThrow();
     expect(shopify.cancels).toHaveLength(1); // not re-run
   });
+
+  describe('resuming a retried onRtoInitiated', () => {
+    // The effect queue retries the whole handler, not individual steps, so a second
+    // call — whether it's a genuine duplicate delivery or a retry after a later step
+    // failed — must not repeat the cancel or double-send the customer message.
+
+    it('is a no-op on the parts that already happened when called twice outright', async () => {
+      const { svc, shopify, store } = await harness();
+      await svc.onRtoInitiated('#1042');
+      await svc.onRtoInitiated('#1042');
+
+      // Would fail if the cancel-status guard were deleted: a second unconditional
+      // cancelOrder call would push a second entry here.
+      expect(shopify.cancels).toHaveLength(1);
+      // Would fail if the message-log guard were deleted: a second sendTemplate call
+      // would push a second 'order_cancelled' row.
+      expect(store.messages.filter((m) => m.template === TEMPLATE_CANCELLED)).toHaveLength(1);
+
+      const row = await store.findOrderByNo('#1042');
+      expect(row).toMatchObject({ cancelStatus: 'CANCELLED', cancelReason: 'RTO', confirmStatus: 'CANCELLED' });
+    });
+
+    it('recovers from a failure after the cancel succeeded: cancel is not repeated, the message sends exactly once, and the ledger is written', async () => {
+      const { svc, shopify, store, whatsapp } = await harness();
+      whatsapp.failWith = new Error('whatsapp 503');
+
+      // First attempt: cancel, tag, order-field update and ledger write all succeed;
+      // the send is the last step and is what throws.
+      await expect(svc.onRtoInitiated('#1042')).rejects.toThrow('whatsapp 503');
+      expect(shopify.cancels).toHaveLength(1);
+      expect(store.ledger[0]).toMatchObject({ outcome: 'RTO' });
+      expect(whatsapp.sent).toHaveLength(0); // the failed send never reached the fake's log
+
+      // Retry: the order is already CANCELLED in Shopify, so a version of this method
+      // that unconditionally re-cancels would throw again here (or, against the fake,
+      // would at least record a second cancel call) instead of completing.
+      whatsapp.failWith = null;
+      await svc.onRtoInitiated('#1042');
+
+      expect(shopify.cancels).toHaveLength(1); // not repeated on retry
+      expect(whatsapp.sent).toHaveLength(1); // sent exactly once, on the retry
+      expect(store.messages.filter((m) => m.template === TEMPLATE_CANCELLED)).toHaveLength(1);
+    });
+  });
 });

@@ -14,15 +14,32 @@ export interface RtoDeps {
   templateLang: string;
   /** Single fulfillment location restock adjustments are posted against. */
   locationId: string;
+  now?: () => Date;
 }
 
 export class RtoService {
-  constructor(private readonly deps: RtoDeps) {}
+  private readonly now: () => Date;
+
+  constructor(private readonly deps: RtoDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
 
   /**
    * The parcel has started its way back. Shopify only restocks *at* cancel time, and
    * that's too early here — the goods haven't physically arrived yet — so this cancels
    * with `restock: false` and leaves the inventory adjustment to `onRtoReturned`.
+   *
+   * The effect queue that calls this retries the *whole handler* on failure, not
+   * individual steps, so every step here is guarded on state actually observed
+   * rather than assumed not to have run yet:
+   *   - cancel only fires if the order isn't already `CANCELLED` — Shopify has no
+   *     "cancel an already-cancelled order" no-op, so calling it twice would error
+   *     and strand the retry here forever.
+   *   - tag and the ledger write are naturally idempotent (re-tagging is a no-op;
+   *     the ledger write repeats the same K–Q values), so they always run.
+   *   - the message send is guarded by the message log, which doubles as the record
+   *     of whether the customer actually got told — the same shape
+   *     `InvoicingService.issueForOrder` uses to resume a partially-completed run.
    */
   async onRtoInitiated(orderNo: string): Promise<void> {
     const { store, shopify, whatsapp, templateLang } = this.deps;
@@ -33,11 +50,14 @@ export class RtoService {
       return;
     }
 
-    await shopify.cancelOrder(order.orderId, {
-      reason: 'OTHER',
-      note: RTO_CANCEL_NOTE,
-      restock: false,
-    });
+    if (order.cancelStatus !== 'CANCELLED') {
+      await shopify.cancelOrder(order.orderId, {
+        reason: 'OTHER',
+        note: RTO_CANCEL_NOTE,
+        restock: false,
+      });
+    }
+
     await shopify.addTag(order.orderId, 'rto');
 
     await store.updateOrderFields(orderNo, {
@@ -59,11 +79,23 @@ export class RtoService {
       platformFee: 0,
     });
 
-    await whatsapp.sendTemplate({
+    const alreadySent = (await store.listMessages()).some(
+      (message) =>
+        message.orderNo === orderNo &&
+        message.template === TEMPLATE_CANCELLED &&
+        message.direction === 'out',
+    );
+    if (alreadySent) return;
+
+    const timestamp = this.now().toISOString();
+    const { wamid } = await whatsapp.sendTemplate({
       to: order.phone,
       template: TEMPLATE_CANCELLED,
       languageCode: templateLang,
       bodyParams: [order.customerName, order.orderNo, 'returned to us undelivered'],
+    });
+    await store.appendMessage({
+      orderNo, template: TEMPLATE_CANCELLED, wamid, direction: 'out', status: 'sent', timestamp,
     });
   }
 
@@ -73,6 +105,17 @@ export class RtoService {
    * with different failure modes, and it can partially succeed across variants — so it
    * gets its own retry rather than piggybacking on (and potentially re-running) the
    * already-succeeded cancel.
+   *
+   * KNOWN GAP: this method is not safe against a retry after a *partial* success inside
+   * `adjustInventory` itself. `ShopifyWriter.adjustInventory` takes one batch of changes
+   * and returns `Promise<void>` — it throws on any `userErrors`, but reports no per-item
+   * outcome, so on a partial failure there is no way for this service to tell which
+   * variants already landed and which didn't. A naive retry re-reads the same line items
+   * from `getOrderLineItems` and re-submits the full batch, double-crediting whichever
+   * variants succeeded on the failed attempt. Making this safe would need either the
+   * Shopify adapter to report per-change results, or a persisted per-item "restocked"
+   * marker written before/after each change — both outside this file's scope. Left as an
+   * open gap rather than a false guarantee; see the Task 17/18 report.
    */
   async onRtoReturned(orderNo: string): Promise<void> {
     const { store, shopify, locationId } = this.deps;
