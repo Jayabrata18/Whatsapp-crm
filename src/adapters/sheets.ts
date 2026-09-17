@@ -59,6 +59,13 @@ export interface ShipmentRow {
   rtoReturnedAt: string;
   lastSyncedAt: string;
   rawStatus: string;
+  /**
+   * Stamped once `RtoService.onRtoReturned` has successfully restocked this shipment.
+   * Blocks a retry of the same effect from re-submitting `adjustInventory` — appended
+   * as the last column rather than inserted earlier, so it doesn't shift any existing
+   * `shipments` column letter.
+   */
+  rtoRestockedAt: string;
 }
 
 /**
@@ -185,6 +192,7 @@ export const SHIPMENT_COLUMNS: Record<keyof ShipmentRow, string> = {
   orderNo: 'A', awb: 'B', courier: 'C', status: 'D',
   shippedAt: 'E', ofdAt: 'F', deliveredAt: 'G',
   rtoInitiatedAt: 'H', rtoReturnedAt: 'I', lastSyncedAt: 'J', rawStatus: 'K',
+  rtoRestockedAt: 'L',
 };
 
 export const SHIPMENT_HEADERS = [
@@ -199,6 +207,7 @@ export const SHIPMENT_HEADERS = [
   'rto_returned_at',
   'last_synced_at',
   'raw_status',
+  'rto_restocked_at',
 ] as const;
 
 export const INVOICE_COLUMNS: Record<keyof InvoiceRow, string> = {

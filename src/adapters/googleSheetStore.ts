@@ -42,7 +42,7 @@ export interface SheetsApi {
 const ORDERS_RANGE = 'orders!A:U';
 const MESSAGES_RANGE = 'messages!A:F';
 const EVENTS_RANGE = 'events!A:C';
-const SHIPMENTS_RANGE = 'shipments!A:K';
+const SHIPMENTS_RANGE = 'shipments!A:L';
 const INVOICES_RANGE = 'invoices!A:N';
 const EFFECTS_RANGE = 'effects!A:I';
 const LEDGER_APPEND_RANGE = 'ledger!A:J';
@@ -137,6 +137,7 @@ export function shipmentRowToValues(row: ShipmentRow): (string | number)[] {
     row.rtoReturnedAt,
     row.lastSyncedAt,
     row.rawStatus,
+    row.rtoRestockedAt,
   ];
 }
 
@@ -153,6 +154,7 @@ export function valuesToShipmentRow(values: unknown[]): ShipmentRow {
     rtoReturnedAt: str(values[8]),
     lastSyncedAt: str(values[9]),
     rawStatus: str(values[10]),
+    rtoRestockedAt: str(values[11]),
   };
 }
 

@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { RtoService, RTO_CANCEL_NOTE, TEMPLATE_CANCELLED, type RtoDeps } from '../../src/services/rto.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
 import { StubShopifyWriter, StubWhatsAppClient } from '../fakes/stubClients.js';
+import { baseShipment } from '../fixtures/stage1.js';
 import type { OrderRow } from '../../src/adapters/sheets.js';
 
+const NOW = new Date('2026-09-15T09:00:00.000Z');
 const LOCATION_ID = 'gid://shopify/Location/9';
 
 function order(overrides: Partial<OrderRow> = {}): OrderRow {
@@ -36,6 +38,10 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
 interface HarnessOpts {
   adjustThrows?: boolean;
   lineItems?: Array<{ inventoryItemId: string; quantity: number }>;
+  /** Seeds the shipments row with a pre-existing restock stamp, to test the resume guard. */
+  alreadyRestockedAt?: string;
+  /** Omit the shipment row entirely, to test the no-row-to-stamp fallback. */
+  noShipmentRow?: boolean;
 }
 
 async function harness(opts: HarnessOpts = {}) {
@@ -56,6 +62,14 @@ async function harness(opts: HarnessOpts = {}) {
     },
     25,
   );
+  if (!opts.noShipmentRow) {
+    // baseShipment.awb ('SF000000001') and orderNo ('#1042') already match the order fixture above.
+    await store.upsertShipment({
+      ...baseShipment,
+      status: 'RTO_RETURNED',
+      rtoRestockedAt: opts.alreadyRestockedAt ?? '',
+    });
+  }
 
   const shopify = new StubShopifyWriter();
   shopify.lineItems = opts.lineItems ?? [{ inventoryItemId: 'gid://shopify/InventoryItem/1', quantity: 2 }];
@@ -69,6 +83,7 @@ async function harness(opts: HarnessOpts = {}) {
     whatsapp,
     templateLang: 'en',
     locationId: LOCATION_ID,
+    now: () => NOW,
   };
   const svc = new RtoService(deps);
   return { svc, store, shopify, whatsapp };
@@ -138,6 +153,44 @@ describe('RtoService', () => {
     await svc.onRtoInitiated('#1042'); // succeeded
     await expect(svc.onRtoReturned('#1042')).rejects.toThrow();
     expect(shopify.cancels).toHaveLength(1); // not re-run
+  });
+
+  describe('resuming a retried onRtoReturned', () => {
+    // Guards a whole-handler retry that isn't caused by adjustInventory itself (a crash
+    // right after it returns, a duplicate effect enqueue, etc.) — not a partial failure
+    // inside the mutation call, which stays an open, documented gap (see rto.ts).
+
+    it('stamps rtoRestockedAt on the shipment row after a successful restock', async () => {
+      const { svc, store } = await harness();
+      await svc.onRtoReturned('#1042');
+      const shipment = await store.findShipmentByAwb('SF000000001');
+      // Would pass on a no-op stamp (e.g. a hardcoded truthy string) too, so this checks
+      // the exact injected clock value, not just "some string got written".
+      expect(shipment?.rtoRestockedAt).toBe(NOW.toISOString());
+    });
+
+    it('skips adjustInventory on a second call once the shipment is already stamped', async () => {
+      const { svc, shopify } = await harness();
+      await svc.onRtoReturned('#1042');
+      await svc.onRtoReturned('#1042');
+      // Would fail if the stamp guard were deleted: a second unconditional call would
+      // push a second batch here.
+      expect(shopify.inventoryAdjustments).toHaveLength(1);
+    });
+
+    it('does not restock at all if the shipment already carries a stamp from a prior run', async () => {
+      const { svc, shopify } = await harness({ alreadyRestockedAt: '2026-09-14T00:00:00.000Z' });
+      await svc.onRtoReturned('#1042');
+      expect(shopify.inventoryAdjustments).toEqual([]);
+    });
+
+    it('still restocks, but logs rather than crashes, when no shipment row exists to stamp', async () => {
+      const { svc, shopify } = await harness({ noShipmentRow: true });
+      await svc.onRtoReturned('#1042');
+      // No row to guard against, so this can't be made resumable — but the restock the
+      // caller actually asked for must still happen rather than being silently skipped.
+      expect(shopify.inventoryAdjustments).toHaveLength(1);
+    });
   });
 
   describe('resuming a retried onRtoInitiated', () => {

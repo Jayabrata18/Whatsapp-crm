@@ -12,6 +12,7 @@ export const baseShipment: ShipmentRow = {
   rtoReturnedAt: '',
   lastSyncedAt: '2026-09-10T10:00:00.000Z',
   rawStatus: 'IN_TRANSIT',
+  rtoRestockedAt: '',
 };
 
 export const baseInvoice: InvoiceRow = {

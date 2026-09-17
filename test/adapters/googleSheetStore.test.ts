@@ -308,7 +308,7 @@ describe('GoogleSheetStore shipments', () => {
     api.tabs.shipments = [['header']];
     const store = new GoogleSheetStore(api, 'sheet123');
     await store.upsertShipment(baseShipment);
-    expect(api.appended[0]?.range).toBe('shipments!A:K');
+    expect(api.appended[0]?.range).toBe('shipments!A:L');
     expect(api.appended[0]?.values[0]?.[1]).toBe(baseShipment.awb);
   });
 

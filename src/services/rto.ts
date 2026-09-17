@@ -106,16 +106,26 @@ export class RtoService {
    * gets its own retry rather than piggybacking on (and potentially re-running) the
    * already-succeeded cancel.
    *
-   * KNOWN GAP: this method is not safe against a retry after a *partial* success inside
-   * `adjustInventory` itself. `ShopifyWriter.adjustInventory` takes one batch of changes
-   * and returns `Promise<void>` — it throws on any `userErrors`, but reports no per-item
-   * outcome, so on a partial failure there is no way for this service to tell which
-   * variants already landed and which didn't. A naive retry re-reads the same line items
-   * from `getOrderLineItems` and re-submits the full batch, double-crediting whichever
-   * variants succeeded on the failed attempt. Making this safe would need either the
-   * Shopify adapter to report per-change results, or a persisted per-item "restocked"
-   * marker written before/after each change — both outside this file's scope. Left as an
-   * open gap rather than a false guarantee; see the Task 17/18 report.
+   * The shipment row's `rtoRestockedAt` stamp guards against a whole-handler retry that
+   * isn't caused by `adjustInventory` itself (a crash before this method returns, a
+   * duplicate effect enqueue, etc.) — once stamped, this returns without calling
+   * `adjustInventory` again.
+   *
+   * KNOWN GAP, deliberately not fixed here: this stamp does **not** protect against a
+   * failure *inside* a single `adjustInventory` call. `ShopifyWriter.adjustInventory`
+   * takes one batch of changes and returns `Promise<void>` — it throws on any
+   * `userErrors`, but reports no per-item outcome, so if Shopify partially applies some
+   * changes before failing validation on others, there is no way for this service to
+   * tell which variants already landed. A retry after that failure re-reads the same
+   * line items and re-submits the full batch, double-crediting whichever variants
+   * succeeded on the failed attempt. The real fix is Shopify's `@idempotent(key:)`
+   * directive on `inventoryAdjustQuantities`, optional from API version 2026-01 and
+   * required from 2026-04 — this adapter is pinned to 2025-01
+   * (`shopifyAdmin.ts`'s `API_VERSION`), and that version bump is tracked as its own
+   * task rather than folded in here, since no test in this repo (all fetch-faked) could
+   * catch a GraphQL shape regression from bumping it. Accepted deliberately: the failure
+   * needs a crash mid-mutation, and the resulting error is over-restock — visible in a
+   * stock count and correctable by hand — not overselling, which is customer-facing.
    */
   async onRtoReturned(orderNo: string): Promise<void> {
     const { store, shopify, locationId } = this.deps;
@@ -126,9 +136,31 @@ export class RtoService {
       return;
     }
 
+    const shipment = await store.findShipmentByAwb(order.awb);
+    if (shipment?.rtoRestockedAt) {
+      log('info', 'restock already recorded for this shipment, skipping adjustInventory', {
+        order_no: orderNo,
+        awb: order.awb,
+      });
+      return;
+    }
+
     const items = await shopify.getOrderLineItems(order.orderId);
     await shopify.adjustInventory(
       items.map((item) => ({ inventoryItemId: item.inventoryItemId, locationId, delta: item.quantity })),
     );
+
+    if (shipment) {
+      await store.upsertShipment({ ...shipment, rtoRestockedAt: this.now().toISOString() });
+    } else {
+      // No shipment row to stamp — the restock still happened, but a subsequent retry
+      // has nothing to check against and would run adjustInventory again. Should not
+      // occur in practice: onRtoReturned only fires from a shipment status transition,
+      // which is exactly what writes this row (Task 15).
+      log('warn', 'no shipment row found to stamp the restock against', {
+        order_no: orderNo,
+        awb: order.awb,
+      });
+    }
   }
 }

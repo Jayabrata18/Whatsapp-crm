@@ -183,6 +183,7 @@ export class ShipmentSyncService {
       rtoReturnedAt: '',
       lastSyncedAt: '',
       rawStatus: '',
+      rtoRestockedAt: '',
     };
 
     await this.deps.store.upsertShipment({
