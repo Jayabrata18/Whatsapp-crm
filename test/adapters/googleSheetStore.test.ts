@@ -429,6 +429,30 @@ describe('GoogleSheetStore effects', () => {
   });
 });
 
+describe('GoogleSheetStore b2cs', () => {
+  it('appends one row per bucket, tagged with the month, in one call', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.b2cs = [['header']];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    await store.appendB2cs('2026-09', [
+      { placeOfSupply: '19', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 },
+      { placeOfSupply: '27', rate: 18, taxableValue: 2000, cess: 0, invoiceCount: 1 },
+    ]);
+    expect(api.appended).toHaveLength(1);
+    expect(api.appended[0]?.range).toBe('b2cs!A:F');
+    expect(api.appended[0]?.values).toEqual([
+      ['2026-09', '19', 5, 1000, 0, 1],
+      ['2026-09', '27', 18, 2000, 0, 1],
+    ]);
+  });
+
+  it('does not call the API for an empty rollup', async () => {
+    const api = new FakeSheetsApi();
+    await new GoogleSheetStore(api, 'sheet123').appendB2cs('2026-09', []);
+    expect(api.appended).toHaveLength(0);
+  });
+});
+
 describe('GoogleSheetStore ledger — the operator block (R–V) must be unreachable', () => {
   it('appends A–J, never touching a column past J on the append call', async () => {
     const api = new FakeSheetsApi();

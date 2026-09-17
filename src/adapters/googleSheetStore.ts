@@ -23,6 +23,7 @@ import {
   type ShipmentRow,
   type SheetStore,
 } from './sheets.js';
+import type { B2csRow } from '../core/b2cs.js';
 
 /**
  * The narrow slice of the Sheets API this adapter needs. Hand-rolled rather
@@ -47,6 +48,7 @@ const INVOICES_RANGE = 'invoices!A:N';
 const EFFECTS_RANGE = 'effects!A:I';
 const LEDGER_APPEND_RANGE = 'ledger!A:J';
 const LEDGER_LOOKUP_RANGE = 'ledger!A:A';
+const B2CS_RANGE = 'b2cs!A:F';
 
 export function orderRowToValues(row: OrderRow): (string | number | boolean)[] {
   return [
@@ -227,6 +229,10 @@ export function valuesToEffectRow(values: unknown[]): EffectRow {
 /** FY segment of `PREFIX/FY/SEQ`, e.g. `26-27` out of `UM/26-27/0007`. */
 function invoiceFy(invoiceNo: string): string {
   return invoiceNo.split('/')[1] ?? '';
+}
+
+function b2csRowToValues(month: string, row: B2csRow): (string | number)[] {
+  return [month, row.placeOfSupply, row.rate, row.taxableValue, row.cess, row.invoiceCount];
 }
 
 export class GoogleSheetStore implements SheetStore {
@@ -476,6 +482,11 @@ export class GoogleSheetStore implements SheetStore {
       .slice(1)
       .filter((row) => str(row[0]) !== '')
       .map((row) => Object.fromEntries(LEDGER_HEADERS.map((header, i) => [header, row[i] ?? ''])));
+  }
+
+  async appendB2cs(month: string, rows: B2csRow[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.api.appendValues(this.sheetId, B2CS_RANGE, rows.map((row) => b2csRowToValues(month, row)));
   }
 }
 

@@ -16,6 +16,7 @@ import type {
   ShipmentRow,
   SheetStore,
 } from '../../src/adapters/sheets.js';
+import type { B2csRow } from '../../src/core/b2cs.js';
 
 /** What the fake actually stores: the hub-owned order fields, plus outcome fields once filled in. */
 type LedgerRecord = LedgerOrderFields & Partial<LedgerOutcomeFields>;
@@ -33,6 +34,7 @@ export class InMemorySheetStore implements SheetStore {
   invoices: InvoiceRow[] = [];
   effects: EffectRow[] = [];
   ledger: LedgerRecord[] = [];
+  b2cs: Array<{ month: string } & B2csRow> = [];
 
   async appendOrder(row: OrderRow): Promise<void> {
     this.orders.push({ ...row });
@@ -165,5 +167,9 @@ export class InMemorySheetStore implements SheetStore {
       const values = [...orderValues, ...outcomeValues, ...formulaValues];
       return Object.fromEntries(LEDGER_HEADERS.map((header, i) => [header, values[i] ?? '']));
     });
+  }
+
+  async appendB2cs(month: string, rows: B2csRow[]): Promise<void> {
+    this.b2cs.push(...rows.map((row) => ({ month, ...row })));
   }
 }

@@ -1,5 +1,6 @@
 import type { FulfillmentStatus } from '../core/shipmentState.js';
 import type { LedgerOrderFields, LedgerOutcomeFields } from '../core/ledgerRow.js';
+import type { B2csRow } from '../core/b2cs.js';
 
 export type ConfirmStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'PAID_EARLY' | 'NO_RESPONSE';
 
@@ -141,6 +142,16 @@ export interface SheetStore {
   /** Writes K–Q only — the ceiling is why this exists as its own method. */
   updateLedgerOutcome(orderNo: string, fields: LedgerOutcomeFields): Promise<void>;
   listLedger(): Promise<Record<string, unknown>[]>;
+  /**
+   * Appends one row per B2CS bucket for the month, tagged with that month. Follows
+   * the same append-only convention as `appendInvoiceLines`/`appendEffect` — a
+   * repeat `ReportingService.generate` call for a month that was already generated
+   * appends again rather than replacing, so this tab is an audit trail of every
+   * run, not a single current snapshot. The CSV a caller gets back is always
+   * computed fresh from `listInvoices()`, so only this persisted trail can carry
+   * duplicates from a re-run.
+   */
+  appendB2cs(month: string, rows: B2csRow[]): Promise<void>;
 }
 
 /** Field → column letter. The single source of truth for where each field lives. */
@@ -248,4 +259,18 @@ export const EFFECT_HEADERS = [
   'last_error',
   'created_at',
   'next_attempt_at',
+] as const;
+
+/** `month` isn't part of `B2csRow` — it's the sheet's own key for grouping runs, supplied by the caller. */
+export const B2CS_COLUMNS: Record<'month' | keyof B2csRow, string> = {
+  month: 'A', placeOfSupply: 'B', rate: 'C', taxableValue: 'D', cess: 'E', invoiceCount: 'F',
+};
+
+export const B2CS_HEADERS = [
+  'month',
+  'place_of_supply',
+  'rate',
+  'taxable_value',
+  'cess',
+  'invoice_count',
 ] as const;
