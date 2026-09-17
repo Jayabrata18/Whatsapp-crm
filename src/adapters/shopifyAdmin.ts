@@ -1,3 +1,5 @@
+import { log } from '../logger.js';
+
 const API_VERSION = '2025-01';
 
 const TAGS_ADD = `
@@ -176,18 +178,30 @@ export class ShopifyAdminClient implements ShopifyWriter {
 
     // Shopify rejects a cancel against an order that's already cancelled — expected on
     // a retry that lands after a prior attempt's cancel already succeeded, and no second
-    // cancellation happens, so this is a no-op to treat as success. Matched on both
-    // "already" and "cancel" rather than one exact phrase: the precise wording at our
-    // pinned API version isn't independently confirmed, and community reports show
-    // Shopify doesn't always phrase this consistently. Every other userError (e.g. an
-    // order id Shopify doesn't recognise) still has to throw.
-    const allAlreadyCancelled = userErrors.every((e) => {
-      const message = (e.message ?? '').toLowerCase();
-      return message.includes('already') && message.includes('cancel');
-    });
+    // cancellation happens, so this is a no-op to treat as success.
+    //
+    // The exact wording below ('already cancelled') is NOT independently confirmed
+    // against Shopify's live response at our pinned API version (2025-01) — it's our
+    // best guess at the real phrase. Deliberately kept to one narrow phrase rather than
+    // broadened (e.g. matching on "already" + "cancel" as two independent tokens):
+    // `orderCancel` also rejects a cancel for three other, unrelated preconditions
+    // (a pending payment authorization, an active return in progress, an outstanding
+    // fulfillment that can't be cancelled), and at least one of those could plausibly
+    // phrase its own message with both "already" and "cancel" in it — e.g. "a refund is
+    // already in progress and the order cannot be cancelled". A false match on one of
+    // those would report `'already_cancelled'` on a cancel that never happened, on an
+    // operation Shopify documents as irreversible — a silent no-op, which is worse than
+    // this failing loudly. If this string turns out to be wrong, that failure is loud by
+    // design: it throws below with the exact message logged, so correcting the matcher
+    // is a one-line change with no guesswork. Do not "helpfully" broaden this again
+    // without confirming the real wording against a live response first.
+    const allAlreadyCancelled = userErrors.every((e) =>
+      (e.message ?? '').toLowerCase().includes('already cancelled'),
+    );
     if (allAlreadyCancelled) return 'already_cancelled';
 
     const messages = userErrors.map((e) => e.message ?? 'unknown error').join('; ');
+    log('error', 'Shopify orderCancel rejected', { order_id: orderId, errors: messages });
     throw new Error(`Shopify orderCancel rejected: ${messages}`);
   }
 
