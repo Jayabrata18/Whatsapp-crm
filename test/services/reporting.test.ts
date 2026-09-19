@@ -3,9 +3,29 @@ import { ReportingService } from '../../src/services/reporting.js';
 import { InMemorySheetStore } from '../fakes/inMemorySheetStore.js';
 import { baseInvoice } from '../fixtures/stage1.js';
 import type { InvoiceRow } from '../../src/adapters/sheets.js';
+import type { B2csRow } from '../../src/core/b2cs.js';
 
 function inv(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
   return { ...baseInvoice, ...overrides };
+}
+
+/**
+ * `InMemorySheetStore.replaceB2csMonth` reads and writes `this.b2cs` in one
+ * synchronous statement with no `await` in between, so it can never be caught
+ * mid-update by a concurrent call — unlike `GoogleSheetStore.replaceB2csMonth`,
+ * which reads the whole range over the network, computes, and only then writes
+ * it back, leaving a real gap where another call's write can land in between.
+ * This fake reproduces that same read...gap...write shape so the concurrency
+ * test below can actually exercise the hazard `ReportingService`'s mutex
+ * guards against, rather than relying on an implementation that happens not
+ * to have it.
+ */
+class SlowB2csStore extends InMemorySheetStore {
+  override async replaceB2csMonth(month: string, rows: B2csRow[]): Promise<void> {
+    const before = this.b2cs; // the "getValues()" read
+    await Promise.resolve(); // stands in for the network round trip
+    this.b2cs = [...before.filter((row) => row.month !== month), ...rows.map((row) => ({ month, ...row }))];
+  }
 }
 
 const B2CS_HEADER = 'Type,Place Of Supply,Applicable % of Tax Rate,Rate,Taxable Value,Cess Amount,E-Commerce GSTIN';
@@ -138,5 +158,26 @@ describe('ReportingService.generate', () => {
     expect(store.b2cs).toEqual([
       { month: '2026-09', placeOfSupply: '19', rate: 5, taxableValue: 500, cess: 0, invoiceCount: 1 },
     ]);
+  });
+
+  /**
+   * Neither call is awaited before the other starts — two dashboard tabs calling
+   * the report endpoint for different months, or a client retrying one call while
+   * the first is still in flight. `replaceB2csMonth` on the real adapter is a
+   * read-then-write over the WHOLE b2cs range: without a lock spanning the read
+   * and the write, call A's write can land using a snapshot taken before call B's
+   * write happened, silently erasing B's month when A's write lands second.
+   */
+  it('does not lose either month on two genuinely concurrent generate() calls for different months', async () => {
+    const store = new SlowB2csStore();
+    await store.appendInvoiceLines([
+      inv({ invoiceNo: 'UM/26-27/0001', invoiceDate: '2026-08-05T00:00:00.000Z', taxableValue: 700 }),
+      inv({ invoiceNo: 'UM/26-27/0002', invoiceDate: '2026-09-05T00:00:00.000Z', taxableValue: 1000 }),
+    ]);
+    const service = new ReportingService({ store, sellerStateCode: '19' });
+
+    await Promise.all([service.generate('2026-08'), service.generate('2026-09')]);
+
+    expect(store.b2cs.map((row) => row.month).sort()).toEqual(['2026-08', '2026-09']);
   });
 });
