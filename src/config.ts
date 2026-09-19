@@ -10,6 +10,8 @@ const schema = z.object({
   SHOPIFY_WEBHOOK_SECRET: z.string().min(1),
   SHOPIFY_STORE_DOMAIN: z.string().min(1),
   SHOPIFY_ADMIN_TOKEN: z.string().min(1),
+  /** Single fulfillment location `RtoService.onRtoReturned` posts restock adjustments against. */
+  SHOPIFY_LOCATION_ID: z.string().min(1),
   CASHFREE_APP_ID: z.string().optional().default(''),
   CASHFREE_SECRET_KEY: z.string().optional().default(''),
   CASHFREE_ENV: z.enum(['TEST', 'PROD']).optional().default('TEST'),
@@ -48,6 +50,7 @@ export interface Config {
   shopifyWebhookSecret: string;
   shopifyStoreDomain: string;
   shopifyAdminToken: string;
+  shopifyLocationId: string;
   cashfreeAppId: string;
   cashfreeSecretKey: string;
   cashfreeEnv: 'TEST' | 'PROD';
@@ -95,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     shopifyWebhookSecret: e.SHOPIFY_WEBHOOK_SECRET,
     shopifyStoreDomain: e.SHOPIFY_STORE_DOMAIN,
     shopifyAdminToken: e.SHOPIFY_ADMIN_TOKEN,
+    shopifyLocationId: e.SHOPIFY_LOCATION_ID,
     cashfreeAppId: e.CASHFREE_APP_ID,
     cashfreeSecretKey: e.CASHFREE_SECRET_KEY,
     cashfreeEnv: e.CASHFREE_ENV,

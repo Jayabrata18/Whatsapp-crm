@@ -114,3 +114,50 @@ export function parseShopifyOrder(payload: unknown, codGatewayNames: string[]): 
     shopifyTaxTotal,
   };
 }
+
+export interface ParsedFulfillment {
+  /** The numeric Shopify order id — matches `OrderRow.orderId`, not `orderNo`. */
+  orderId: string;
+  /** Null when Shopify hasn't attached a tracking number yet (common at `fulfillments/create`
+   *  for a courier that assigns the AWB later); the caller decides what to do with that. */
+  awb: string | null;
+  courier: string;
+}
+
+interface RawFulfillmentPayload {
+  order_id?: unknown;
+  tracking_number?: unknown;
+  tracking_numbers?: unknown;
+  tracking_company?: unknown;
+}
+
+/**
+ * Parses a Shopify `fulfillments/create` / `fulfillments/update` webhook body. Deliberately
+ * reads `order_id` — the numeric Shopify order id — rather than any order-name-shaped field:
+ * the fulfillment resource's own `name` (e.g. `#1042.1`) is the *fulfillment's* name, not the
+ * order's, and parsing a suffix off it to recover the order number would be guessing at a
+ * format Shopify doesn't document as stable. `order_id` is exactly the identifier
+ * `parseShopifyOrder` already freezes into `OrderRow.orderId` at intake, so the caller maps
+ * it back to `orderNo` off the same store, not off a string convention.
+ */
+export function parseShopifyFulfillment(payload: unknown): ParsedFulfillment {
+  const raw = (payload ?? {}) as RawFulfillmentPayload;
+
+  if (raw.order_id === undefined || raw.order_id === null || raw.order_id === '') {
+    throw new Error('Shopify fulfillment payload is missing order_id');
+  }
+
+  const trackingNumbers = Array.isArray(raw.tracking_numbers)
+    ? raw.tracking_numbers.filter((n): n is string => typeof n === 'string' && n.length > 0)
+    : [];
+  const awb =
+    (typeof raw.tracking_number === 'string' && raw.tracking_number.length > 0
+      ? raw.tracking_number
+      : null) ?? trackingNumbers[0] ?? null;
+
+  return {
+    orderId: String(raw.order_id),
+    awb,
+    courier: typeof raw.tracking_company === 'string' ? raw.tracking_company : '',
+  };
+}

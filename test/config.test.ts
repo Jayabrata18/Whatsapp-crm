@@ -10,6 +10,7 @@ const baseEnv = {
   SHOPIFY_WEBHOOK_SECRET: 'shopsecret',
   SHOPIFY_STORE_DOMAIN: 'urbnmyth.myshopify.com',
   SHOPIFY_ADMIN_TOKEN: 'shpat_x',
+  SHOPIFY_LOCATION_ID: 'gid://shopify/Location/9',
   CASHFREE_APP_ID: 'cfid',
   CASHFREE_SECRET_KEY: 'cfsecret',
   CASHFREE_ENV: 'TEST',
