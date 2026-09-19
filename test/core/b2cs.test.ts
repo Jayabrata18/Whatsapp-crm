@@ -56,6 +56,25 @@ describe('rollupB2cs', () => {
     ]);
   });
 
+  /**
+   * Every other fixture in this file gives one bucket at most one row per invoice,
+   * so `invoiceCount` and `rows.length` are numerically identical throughout — a
+   * `rollupB2cs` that counted rows instead of distinct invoice numbers would still
+   * pass every test above. Here two rows sharing one invoiceNo land in the SAME
+   * bucket (same place of supply, same rate), which only a `Set<invoiceNo>` count
+   * gets right: taxableValue sums both rows, but invoiceCount stays 1.
+   */
+  it('counts an invoice once even when two of its rows land in the very same bucket', () => {
+    const { rows } = rollupB2cs([
+      inv({ invoiceNo: 'UM/26-27/0006', placeOfSupply: '19', gstRate: 5, taxableValue: 600 }),
+      inv({ invoiceNo: 'UM/26-27/0006', placeOfSupply: '19', gstRate: 5, taxableValue: 400 }),
+    ], '2026-09', '19');
+
+    expect(rows).toEqual([
+      { placeOfSupply: '19', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 },
+    ]);
+  });
+
   it('excludes an inter-state invoice above the B2CL threshold and reports it', () => {
     const big = inv({ placeOfSupply: '27', gstRate: 18, taxableValue: 300_000, invoiceTotal: 354_000 });
     const { rows, excluded } = rollupB2cs(

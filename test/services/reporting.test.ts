@@ -79,14 +79,14 @@ describe('ReportingService.generate', () => {
   });
 
   /**
-   * `generate` has no memory of prior runs, and the b2cs tab is append-only like
-   * every other tab this store writes — so regenerating a month before filing
-   * appends a second copy of that month's rows rather than replacing the first.
-   * The CSV returned to the caller is always freshly computed from `listInvoices()`,
-   * so it stays correct either way; this test documents (rather than silently
-   * hides) the one place a second call has a visible effect.
+   * The b2cs tab is for direct operator/accountant inspection like every other tab
+   * in this store, and `generate` has no memory of prior runs — a double-click or an
+   * HTTP retry (Tasks 22/23 expose this over HTTP) makes a repeat call for the same
+   * month a realistic event, not a hypothetical one. `replaceB2csMonth` must leave
+   * exactly one set of rows for that month behind, not two overlapping sets a human
+   * could accidentally sum together.
    */
-  it('appends again on a second call for the same month, rather than replacing', async () => {
+  it('replaces rather than duplicates on a second call for the same month', async () => {
     const store = new InMemorySheetStore();
     await store.appendInvoiceLines([inv({ invoiceDate: '2026-09-05T00:00:00.000Z' })]);
     const service = new ReportingService({ store, sellerStateCode: '19' });
@@ -95,6 +95,48 @@ describe('ReportingService.generate', () => {
     const second = await service.generate('2026-09');
 
     expect(second.rows).toEqual([{ placeOfSupply: 'KA', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 }]);
+    expect(store.b2cs).toEqual([
+      { month: '2026-09', placeOfSupply: 'KA', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 },
+    ]);
+  });
+
+  it('regenerating one month leaves a different month\'s persisted rows untouched', async () => {
+    const store = new InMemorySheetStore();
+    await store.appendInvoiceLines([
+      inv({ invoiceNo: 'UM/26-27/0001', invoiceDate: '2026-08-05T00:00:00.000Z', taxableValue: 700 }),
+    ]);
+    const service = new ReportingService({ store, sellerStateCode: '19' });
+    await service.generate('2026-08');
+
+    await store.appendInvoiceLines([
+      inv({ invoiceNo: 'UM/26-27/0002', invoiceDate: '2026-09-05T00:00:00.000Z', taxableValue: 1000 }),
+    ]);
+    await service.generate('2026-09');
+    await service.generate('2026-09'); // a re-run of September must not disturb August
+
+    expect(store.b2cs).toEqual([
+      { month: '2026-08', placeOfSupply: 'KA', rate: 5, taxableValue: 700, cess: 0, invoiceCount: 1 },
+      { month: '2026-09', placeOfSupply: 'KA', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 },
+    ]);
+  });
+
+  it('leaves no leftover rows when a regeneration produces fewer buckets than before', async () => {
+    const store = new InMemorySheetStore();
+    // First run: two states, two buckets.
+    await store.appendInvoiceLines([
+      inv({ invoiceNo: 'UM/26-27/0001', placeOfSupply: '19', invoiceDate: '2026-09-05T00:00:00.000Z', taxableValue: 500 }),
+      inv({ invoiceNo: 'UM/26-27/0002', placeOfSupply: '27', invoiceDate: '2026-09-06T00:00:00.000Z', taxableValue: 2000 }),
+    ]);
+    const service = new ReportingService({ store, sellerStateCode: '19' });
+    await service.generate('2026-09');
     expect(store.b2cs).toHaveLength(2);
+
+    // Second run: one of those invoices is voided, collapsing the report to one bucket.
+    await store.voidInvoice('UM/26-27/0002');
+    await service.generate('2026-09');
+
+    expect(store.b2cs).toEqual([
+      { month: '2026-09', placeOfSupply: '19', rate: 5, taxableValue: 500, cess: 0, invoiceCount: 1 },
+    ]);
   });
 });

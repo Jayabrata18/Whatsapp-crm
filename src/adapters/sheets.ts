@@ -142,16 +142,17 @@ export interface SheetStore {
   /** Writes K–Q only — the ceiling is why this exists as its own method. */
   updateLedgerOutcome(orderNo: string, fields: LedgerOutcomeFields): Promise<void>;
   listLedger(): Promise<Record<string, unknown>[]>;
+  /** Every persisted B2CS row, across every month a report has ever been generated for. */
+  listB2cs(): Promise<Array<{ month: string } & B2csRow>>;
   /**
-   * Appends one row per B2CS bucket for the month, tagged with that month. Follows
-   * the same append-only convention as `appendInvoiceLines`/`appendEffect` — a
-   * repeat `ReportingService.generate` call for a month that was already generated
-   * appends again rather than replacing, so this tab is an audit trail of every
-   * run, not a single current snapshot. The CSV a caller gets back is always
-   * computed fresh from `listInvoices()`, so only this persisted trail can carry
-   * duplicates from a re-run.
+   * Replaces every row tagged with `month` with `rows` — the same replace-by-key
+   * convention `upsertShipment` uses, applied here with `month` as the key instead
+   * of `awb`. This tab is meant for direct operator/accountant inspection like every
+   * other tab in this store, so a re-run of `ReportingService.generate` for a month
+   * (a double-click, an HTTP retry-on-timeout) must not leave two overlapping sets
+   * of rows for a human to accidentally sum together.
    */
-  appendB2cs(month: string, rows: B2csRow[]): Promise<void>;
+  replaceB2csMonth(month: string, rows: B2csRow[]): Promise<void>;
 }
 
 /** Field → column letter. The single source of truth for where each field lives. */

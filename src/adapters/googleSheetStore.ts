@@ -11,6 +11,7 @@ import {
   type LedgerOutcomeFields,
 } from '../core/ledgerRow.js';
 import {
+  B2CS_HEADERS,
   EFFECT_COLUMNS,
   INVOICE_COLUMNS,
   ORDER_COLUMNS,
@@ -231,8 +232,19 @@ function invoiceFy(invoiceNo: string): string {
   return invoiceNo.split('/')[1] ?? '';
 }
 
-function b2csRowToValues(month: string, row: B2csRow): (string | number)[] {
+export function b2csRowToValues(month: string, row: B2csRow): (string | number)[] {
   return [month, row.placeOfSupply, row.rate, row.taxableValue, row.cess, row.invoiceCount];
+}
+
+export function valuesToB2csRow(values: unknown[]): { month: string } & B2csRow {
+  return {
+    month: str(values[0]),
+    placeOfSupply: str(values[1]),
+    rate: num(values[2]),
+    taxableValue: num(values[3]),
+    cess: num(values[4]),
+    invoiceCount: num(values[5]),
+  };
 }
 
 export class GoogleSheetStore implements SheetStore {
@@ -484,9 +496,36 @@ export class GoogleSheetStore implements SheetStore {
       .map((row) => Object.fromEntries(LEDGER_HEADERS.map((header, i) => [header, row[i] ?? ''])));
   }
 
-  async appendB2cs(month: string, rows: B2csRow[]): Promise<void> {
-    if (rows.length === 0) return;
-    await this.api.appendValues(this.sheetId, B2CS_RANGE, rows.map((row) => b2csRowToValues(month, row)));
+  async listB2cs(): Promise<Array<{ month: string } & B2csRow>> {
+    const values = await this.api.getValues(this.sheetId, B2CS_RANGE);
+    return values.slice(1).filter((row) => str(row[0]) !== '').map(valuesToB2csRow);
+  }
+
+  /**
+   * Reads every existing row, drops whichever belong to `month`, and writes the
+   * kept rows plus the fresh ones back as one block starting at row 2.
+   *
+   * `values.update` only touches the cells it's given — it does not clear cells
+   * beyond the range it writes. So if the new block is shorter than the old one
+   * (fewer buckets this run than last), the write is padded with blank rows out to
+   * the old row count; skipping that step would leave stale data trailing past the
+   * end of the fresh write, silently reappearing the next time someone reads the
+   * whole tab.
+   */
+  async replaceB2csMonth(month: string, rows: B2csRow[]): Promise<void> {
+    const values = await this.api.getValues(this.sheetId, B2CS_RANGE);
+    const existingDataRows = values.slice(1).filter((row) => str(row[0]) !== '');
+    const kept = existingDataRows.filter((row) => str(row[0]) !== month);
+    const fresh = rows.map((row) => b2csRowToValues(month, row));
+    const combined: unknown[][] = [...kept, ...fresh];
+
+    if (combined.length === 0 && existingDataRows.length === 0) return;
+
+    const blankRow: string[] = B2CS_HEADERS.map(() => '');
+    const padded = [...combined];
+    while (padded.length < existingDataRows.length) padded.push(blankRow);
+
+    await this.api.updateValues(this.sheetId, `b2cs!A2:F${1 + padded.length}`, padded);
   }
 }
 

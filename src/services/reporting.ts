@@ -16,7 +16,7 @@ export class ReportingService {
     const invoices = await this.deps.store.listInvoices();
     const { rows, excluded } = rollupB2cs(invoices, month, this.deps.sellerStateCode);
     const csv = toB2csCsv(rows);
-    await this.deps.store.appendB2cs(month, rows);
+    await this.deps.store.replaceB2csMonth(month, rows);
     return { rows, excluded, csv };
   }
 }

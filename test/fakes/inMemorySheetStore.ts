@@ -169,7 +169,15 @@ export class InMemorySheetStore implements SheetStore {
     });
   }
 
-  async appendB2cs(month: string, rows: B2csRow[]): Promise<void> {
-    this.b2cs.push(...rows.map((row) => ({ month, ...row })));
+  async listB2cs(): Promise<Array<{ month: string } & B2csRow>> {
+    return this.b2cs.map((row) => ({ ...row }));
+  }
+
+  /** Replaces `month`'s rows rather than appending a duplicate set — see `upsertShipment`. */
+  async replaceB2csMonth(month: string, rows: B2csRow[]): Promise<void> {
+    this.b2cs = [
+      ...this.b2cs.filter((row) => row.month !== month),
+      ...rows.map((row) => ({ month, ...row })),
+    ];
   }
 }

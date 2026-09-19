@@ -179,4 +179,28 @@ describe('InMemorySheetStore', () => {
     const store = new InMemorySheetStore();
     await expect(store.updateEffect('nope', { state: 'DONE' })).resolves.toBeUndefined();
   });
+
+  it('replaces a month\'s b2cs rows rather than appending a duplicate set', async () => {
+    const store = new InMemorySheetStore();
+    await store.replaceB2csMonth('2026-09', [
+      { placeOfSupply: '19', rate: 5, taxableValue: 1000, cess: 0, invoiceCount: 1 },
+    ]);
+    await store.replaceB2csMonth('2026-09', [
+      { placeOfSupply: '27', rate: 18, taxableValue: 2000, cess: 0, invoiceCount: 1 },
+    ]);
+    expect(await store.listB2cs()).toEqual([
+      { month: '2026-09', placeOfSupply: '27', rate: 18, taxableValue: 2000, cess: 0, invoiceCount: 1 },
+    ]);
+  });
+
+  it('leaves a different month\'s b2cs rows alone', async () => {
+    const store = new InMemorySheetStore();
+    await store.replaceB2csMonth('2026-08', [
+      { placeOfSupply: '19', rate: 5, taxableValue: 500, cess: 0, invoiceCount: 1 },
+    ]);
+    await store.replaceB2csMonth('2026-09', [
+      { placeOfSupply: '27', rate: 18, taxableValue: 2000, cess: 0, invoiceCount: 1 },
+    ]);
+    expect((await store.listB2cs()).map((row) => row.month).sort()).toEqual(['2026-08', '2026-09']);
+  });
 });
