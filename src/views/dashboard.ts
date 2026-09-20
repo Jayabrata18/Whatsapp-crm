@@ -130,14 +130,33 @@ function showError(message) {
   document.getElementById('updated').textContent = '';
 }
 
-/** Fetches with the stored token; returns null (and shows the 401 hint) if unauthorized. */
-async function authFetch(path) {
-  const res = await fetch(path, { headers: { Authorization: 'Bearer ' + token } });
+/**
+ * Fetches with the stored token; returns null (and shows the 401 hint) if unauthorized.
+ * options is passed straight to fetch (a POST caller can supply { method: 'POST' }) —
+ * the Authorization header is always added on top of whatever headers it supplies.
+ * On any other non-2xx, throws with the server's { error } body when there is one, so
+ * a caller's catch block has something real to show the operator instead of a bare
+ * HTTP status.
+ */
+async function authFetch(path, options) {
+  const res = await fetch(path, {
+    ...(options || {}),
+    headers: { ...((options && options.headers) || {}), Authorization: 'Bearer ' + token },
+  });
   if (res.status === 401) {
     showError('Unauthorized. Open this page as /dashboard?token=YOUR_DASHBOARD_TOKEN');
     return null;
   }
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' on ' + path);
+  if (!res.ok) {
+    let detail = 'HTTP ' + res.status + ' on ' + path;
+    try {
+      const body = await res.json();
+      if (body && typeof body.error === 'string') detail = body.error;
+    } catch (err) {
+      // Not a JSON body (e.g. an HTML error page) — fall back to the generic detail above.
+    }
+    throw new Error(detail);
+  }
   return res;
 }
 
@@ -258,15 +277,12 @@ document.getElementById('cancel-rows').addEventListener('click', async (event) =
   if (!button) return;
   button.disabled = true;
   try {
-    const res = await fetch('/api/cancellations/' + encodeURIComponent(button.dataset.order) + '/approve', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + token },
-    });
-    if (res.ok) {
-      await loadCancellations();
-    } else {
-      button.disabled = false;
-    }
+    const res = await authFetch(
+      '/api/cancellations/' + encodeURIComponent(button.dataset.order) + '/approve',
+      { method: 'POST' },
+    );
+    if (!res) { button.disabled = false; return; } // 401 — authFetch already showed why
+    await loadCancellations();
   } catch (err) {
     button.disabled = false;
     showError(err.message);
