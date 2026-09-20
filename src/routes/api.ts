@@ -2,7 +2,14 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import { computeMetrics } from '../core/metrics.js';
 import { safeCompare } from '../core/signatures.js';
+import { ledgerNumber, ledgerString } from '../core/ledgerRow.js';
+import {
+  amountChargedFor,
+  earlyPayDiscount,
+  resolveInvoiceBasis,
+} from '../core/invoiceBasis.js';
 import { mapShadowfaxStatus } from '../adapters/shadowfax.js';
+import type { GstRates } from '../core/gst.js';
 import type { SheetStore } from '../adapters/sheets.js';
 import type { CancellationService } from '../services/cancellation.js';
 import type { ReportingService } from '../services/reporting.js';
@@ -34,6 +41,8 @@ export function createApiRouter(deps: {
   dashboardToken: string;
   cancellation: Pick<CancellationService, 'listPendingReview' | 'approve'>;
   reporting: Pick<ReportingService, 'generate'>;
+  /** Same rates the invoicing and delivery services use — the Health panel re-runs their guard. */
+  rates: GstRates;
 }): Router {
   const router = Router();
 
@@ -110,9 +119,11 @@ export function createApiRouter(deps: {
   });
 
   router.get('/api/health-flags', async (_req, res) => {
-    const [failedEffects, openShipments] = await Promise.all([
+    const [failedEffects, openShipments, orders, ledger] = await Promise.all([
       deps.store.listFailedEffects(),
       deps.store.listOpenShipments(),
+      deps.store.listOrders(),
+      deps.store.listLedger(),
     ]);
 
     // A courier status the hub doesn't recognise leaves `rawStatus` set but the
@@ -122,7 +133,36 @@ export function createApiRouter(deps: {
       .filter((s) => s.rawStatus !== '' && mapShadowfaxStatus(s.rawStatus) === null)
       .map((s) => ({ orderNo: s.orderNo, awb: s.awb, rawStatus: s.rawStatus }));
 
-    res.json({ failedEffects, unmappedStatuses });
+    // Orders that reached DELIVERED but carry no invoice number, re-run through the very
+    // guard that refused them (core/invoiceBasis.ts). Derived, not stored: the reason an
+    // invoice is blocked is a function of the order and ledger rows themselves, so a
+    // flag written at refusal time could go stale the moment the operator fixes the data,
+    // whereas this clears itself on the next poll. Scoped to delivered-and-uninvoiced on
+    // purpose — that is the set where the gap is costing something today.
+    const blockedInvoices = orders
+      .filter((order) => order.fulfillmentStatus === 'DELIVERED' && order.invoiceNo === '')
+      .map((order) => {
+        const ledgerRow = ledger.find((row) => ledgerString(row, 'order_no') === order.orderNo);
+        const resolved = resolveInvoiceBasis(
+          {
+            posCode: ledgerString(ledgerRow, 'pos_code'),
+            linesJson: order.linesJson,
+            shippingCharged: ledgerNumber(ledgerRow, 'shipping_charged'),
+            amountCharged: amountChargedFor(order),
+            discount: earlyPayDiscount(order),
+          },
+          deps.rates,
+        );
+        if (resolved.ok) return null;
+        return {
+          orderNo: order.orderNo,
+          reasons: resolved.blocks.map((block) => block.reason),
+          detail: resolved.blocks.map((block) => block.detail).join('; '),
+        };
+      })
+      .filter((flag): flag is NonNullable<typeof flag> => flag !== null);
+
+    res.json({ failedEffects, unmappedStatuses, blockedInvoices });
   });
 
   // Reuses the same reporting pipeline `/internal/b2cs` runs, behind the dashboard

@@ -1,7 +1,14 @@
 import { Mutex } from '../core/mutex.js';
 import { financialYear, formatInvoiceNumber } from '../core/invoiceNumber.js';
-import { computeGst, round2, splitTax, type GstBreakdown, type GstLine, type GstRates } from '../core/gst.js';
+import { round2, splitTax, type GstBreakdown, type GstRates } from '../core/gst.js';
 import { isInterState } from '../core/placeOfSupply.js';
+import { ledgerNumber, ledgerString } from '../core/ledgerRow.js';
+import {
+  amountChargedFor,
+  earlyPayDiscount,
+  InvoiceBlockedError,
+  resolveInvoiceBasis,
+} from '../core/invoiceBasis.js';
 import type { InvoiceRow, OrderRow, SheetStore } from '../adapters/sheets.js';
 import type { InvoiceData, InvoiceLine, InvoiceRenderer } from '../adapters/invoicePdf.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
@@ -20,17 +27,6 @@ export interface InvoicingDeps {
 }
 
 export const TEMPLATE_DELIVERED = 'order_delivered_invoice';
-
-/** Reads one field off a `listLedger()` row, which is loosely typed since it mirrors a sheet. */
-function ledgerString(row: Record<string, unknown> | undefined, key: string): string {
-  const value = row?.[key];
-  return typeof value === 'string' ? value : value == null ? '' : String(value);
-}
-
-function ledgerNumber(row: Record<string, unknown> | undefined, key: string): number {
-  const value = Number(row?.[key] ?? 0);
-  return Number.isFinite(value) ? value : 0;
-}
 
 export class InvoicingService {
   private readonly mutex = new Mutex();
@@ -178,11 +174,18 @@ export class InvoicingService {
   }
 
   /**
-   * Reads the ledger row for the order's already-resolved place of supply and its aggregate
-   * item amount, and the order's own frozen `linesJson` for the real rate-determining data.
+   * Reads the ledger row for the order's already-resolved place of supply and its shipping
+   * charge, and the order's own frozen `linesJson` for the real rate-determining data.
    * `linesJson` is what makes a mixed-rate order stay mixed-rate at invoicing time — the
    * ledger only ever kept one blended `itemAmount`, which can't recover which items sat in
    * which GST slab. See docs/superpowers/specs/2026-09-15-stage-1-design.md §4.4/§4.5.
+   *
+   * Everything that could be guessed is instead refused: `resolveInvoiceBasis` blocks on an
+   * unresolved place of supply, on missing line data, and on a round-off past ±₹1, and this
+   * throws rather than issuing a tax invoice built on any of them. The throw propagates out
+   * through the delivery effect, which retries and then records the effect FAILED — visible
+   * on the dashboard's Health panel alongside the blocked-invoice list that reads the same
+   * guard.
    */
   private async buildInvoiceData(
     order: OrderRow,
@@ -195,22 +198,26 @@ export class InvoicingService {
     // pos_code was already resolved via stateCodeFor at intake (Task 9); an empty value means
     // stateCodeFor didn't recognise the code back then, not that this service should retry it —
     // the raw ISO code isn't persisted, only the resolved GST code or blank.
-    let placeOfSupply = ledgerString(ledgerRow, 'pos_code');
-    if (!placeOfSupply) {
-      log('warn', 'place of supply unresolved for invoice, falling back to seller state', {
+    const resolved = resolveInvoiceBasis(
+      {
+        posCode: ledgerString(ledgerRow, 'pos_code'),
+        linesJson: order.linesJson,
+        shippingCharged: ledgerNumber(ledgerRow, 'shipping_charged'),
+        amountCharged: amountChargedFor(order),
+        discount: earlyPayDiscount(order),
+      },
+      this.deps.rates,
+    );
+
+    if (!resolved.ok) {
+      log('error', 'refusing to issue an invoice on unresolved data', {
         order_no: order.orderNo,
+        reasons: resolved.blocks.map((block) => block.reason).join(','),
       });
-      placeOfSupply = this.deps.seller.stateCode;
+      throw new InvoiceBlockedError(order.orderNo, resolved.blocks);
     }
 
-    const shippingCharged = ledgerNumber(ledgerRow, 'shipping_charged');
-    const lines = this.resolveLines(order, ledgerRow);
-
-    // `payable` is `amount - codFee`, the discounted figure for paying early online. A COD
-    // customer hands over the full `amount` at the door, so the invoice must total `amount`
-    // for every order except the one where the customer genuinely paid the discounted sum.
-    const amountCharged = order.confirmStatus === 'PAID_EARLY' ? order.payable : order.amount;
-    const breakdown = computeGst(lines, shippingCharged, amountCharged, this.deps.rates);
+    const { placeOfSupply, breakdown } = resolved.basis;
     const interState = isInterState(placeOfSupply, this.deps.seller.stateCode);
     const split = splitTax(breakdown.taxTotal, interState);
 
@@ -248,28 +255,5 @@ export class InvoicingService {
     };
 
     return { data, breakdown };
-  }
-
-  /**
-   * `linesJson` is the real rate-determining data, frozen at intake. A blank or unparseable
-   * value — an order placed before this column existed, or a corrupted cell — falls back to a
-   * single blended line built from the ledger's aggregate `itemAmount`. An invoice at one rate
-   * is better than no invoice at all, provided the gap is visible, so this warns rather than
-   * throwing.
-   */
-  private resolveLines(order: OrderRow, ledgerRow: Record<string, unknown> | undefined): GstLine[] {
-    if (order.linesJson) {
-      try {
-        const parsed: unknown = JSON.parse(order.linesJson);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed as GstLine[];
-      } catch {
-        // Falls through to the blended-line fallback below.
-      }
-    }
-
-    log('warn', 'order lines unavailable, invoicing at a single blended rate', {
-      order_no: order.orderNo,
-    });
-    return [{ inclUnitPrice: ledgerNumber(ledgerRow, 'item_amount'), quantity: 1 }];
   }
 }

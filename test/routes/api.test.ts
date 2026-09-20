@@ -57,7 +57,13 @@ function build() {
   const reporting = new ReportingService({ store, sellerStateCode: '19' });
   const app = createApp({
     routers: [
-      createApiRouter({ store, dashboardToken: TOKEN, cancellation, reporting }),
+      createApiRouter({
+        store,
+        dashboardToken: TOKEN,
+        cancellation,
+        reporting,
+        rates: { thresholdInr: 2500, low: 5, high: 18 },
+      }),
     ],
   });
   const server = app.listen(0);

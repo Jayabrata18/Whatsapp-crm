@@ -39,6 +39,21 @@ export function ledgerOutcomeValues(f: LedgerOutcomeFields): (string | number)[]
   ];
 }
 
+/**
+ * Reads one field off a `listLedger()` row. Those rows are loosely typed because they
+ * mirror a spreadsheet — every consumer keys off the snake_case column names in
+ * `LEDGER_HEADERS`, and every one of them needs the same two coercions.
+ */
+export function ledgerString(row: Record<string, unknown> | undefined, key: string): string {
+  const value = row?.[key];
+  return typeof value === 'string' ? value : value == null ? '' : String(value);
+}
+
+export function ledgerNumber(row: Record<string, unknown> | undefined, key: string): number {
+  const value = Number(row?.[key] ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function ledgerFormulas(sheetRow: number, corporateTaxPct: number): string[] {
   const r = sheetRow;
   return [

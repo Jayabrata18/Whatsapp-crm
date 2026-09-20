@@ -109,6 +109,11 @@ export function renderDashboard(): string {
   <thead><tr><th>Order</th><th>AWB</th><th>Raw status</th></tr></thead>
   <tbody id="unmapped-rows"></tbody>
 </table></div>
+<div class="sub" style="margin-top:14px;">Blocked invoices — delivered orders the hub refused to invoice rather than guess at. Fix the underlying data, then set the order's <code>delivered</code> effect row back to PENDING so the next drain retries it.</div>
+<div class="wrap"><table>
+  <thead><tr><th>Order</th><th>Reason</th><th>Detail</th></tr></thead>
+  <tbody id="blocked-invoice-rows"></tbody>
+</table></div>
 
 <script>
 const params = new URLSearchParams(location.search);
@@ -244,11 +249,12 @@ async function loadInvoices() {
 async function loadHealth() {
   const res = await authFetch('/api/health-flags');
   if (!res) return;
-  const { failedEffects, unmappedStatuses } = await res.json();
+  const { failedEffects, unmappedStatuses, blockedInvoices } = await res.json();
 
   document.getElementById('health-tiles').innerHTML = [
     tile('Failed effects', failedEffects.length),
     tile('Unmapped statuses', unmappedStatuses.length),
+    tile('Blocked invoices', blockedInvoices.length),
   ].join('');
 
   document.getElementById('failed-effect-rows').innerHTML = failedEffects.map((e) =>
@@ -258,6 +264,11 @@ async function loadHealth() {
   document.getElementById('unmapped-rows').innerHTML = unmappedStatuses.map((s) =>
     '<tr><td>' + esc(s.orderNo) + '</td><td>' + esc(s.awb) + '</td><td>' + esc(s.rawStatus) + '</td></tr>'
   ).join('') || '<tr><td colspan="3">No unmapped statuses.</td></tr>';
+
+  document.getElementById('blocked-invoice-rows').innerHTML = blockedInvoices.map((b) =>
+    '<tr><td>' + esc(b.orderNo) + '</td><td>' + esc(b.reasons.join(', ')) + '</td>' +
+    '<td style="white-space:normal;">' + esc(b.detail) + '</td></tr>'
+  ).join('') || '<tr><td colspan="3">No blocked invoices.</td></tr>';
 }
 
 async function refreshAll() {

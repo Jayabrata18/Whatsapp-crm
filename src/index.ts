@@ -172,6 +172,7 @@ const app = createApp({
       dashboardToken: config.dashboardToken,
       cancellation,
       reporting,
+      rates,
     }),
     createDashboardRouter(),
   ],

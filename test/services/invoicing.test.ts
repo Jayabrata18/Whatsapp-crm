@@ -202,21 +202,23 @@ describe('InvoicingService', () => {
     expect(store.invoices.every((i) => i.invoiceTotal === store.invoices[0]!.invoiceTotal)).toBe(true);
   });
 
-  it('falls back to a single blended line and warns when lines_json is blank', async () => {
+  it('refuses to invoice, rather than guessing a blended rate, when lines_json is blank', async () => {
+    // Was: "falls back to a single blended line and warns". That fallback tested the whole
+    // subtotal against the ₹2,500 threshold, so two ₹1,400 tees — each a 5% supply — came
+    // out as an 18% invoice. Spec §5.3 says flag, not guess; nothing is issued now.
     const { svc, store } = await harness();
     await store.updateOrderFields('#1042', { linesJson: '' });
-    await svc.issueForOrder('#1042');
-    // itemAmount (1800) alone is <= the 2500 threshold, so this still lands at 5%.
-    expect(store.invoices).toHaveLength(1);
-    expect(store.invoices[0]?.gstRate).toBe(5);
+    await expect(svc.issueForOrder('#1042')).rejects.toThrow(/line_items_unavailable/);
+    expect(store.invoices).toHaveLength(0);
+    expect((await store.findOrderByNo('#1042'))?.invoiceNo).toBe('');
   });
 
-  it('falls back to the seller state and warns when place of supply is unresolved', async () => {
+  it('refuses to invoice, rather than falling back to the seller state, when place of supply is unresolved', async () => {
+    // Was: "falls back to the seller state and warns". Substituting '19' turned a
+    // Maharashtra buyer's IGST into CGST+SGST and filed the supply under the wrong state.
     const { svc, store } = await harness({ provinceCode: 'NOPE' });
-    await svc.issueForOrder('#1042');
-    expect(store.invoices[0]?.placeOfSupply).toBe(SELLER.stateCode);
-    // Seller state fallback means intra-state — CGST/SGST, never IGST.
-    expect(store.invoices[0]?.igst).toBe(0);
+    await expect(svc.issueForOrder('#1042')).rejects.toThrow(/unresolved_place_of_supply/);
+    expect(store.invoices).toHaveLength(0);
   });
 
   describe('amount actually charged', () => {

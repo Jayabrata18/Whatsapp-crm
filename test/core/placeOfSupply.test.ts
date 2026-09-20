@@ -13,7 +13,11 @@ describe('stateCodeFor', () => {
     expect(stateCodeFor('')).toBeNull();
   });
   it('covers all 36 states and union territories', () => {
-    expect(Object.keys(STATE_CODES)).toHaveLength(36);
+    // 40 keys, not 36: Uttarakhand, Odisha, Chhattisgarh and Telangana each carry both
+    // their ISO 3166-2:IN code and the alternate spelling Shopify may send (UT/UK,
+    // OR/OD, CT/CG, TG/TS). The 36 distinct *values* are what "full coverage" means —
+    // the key count was only ever a proxy for it.
+    expect(Object.keys(STATE_CODES)).toHaveLength(40);
     expect(new Set(Object.values(STATE_CODES)).size).toBe(36);
   });
 });
