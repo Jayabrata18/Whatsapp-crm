@@ -135,6 +135,10 @@ export class InMemorySheetStore implements SheetStore {
       .map((e) => ({ ...e }));
   }
 
+  async listFailedEffects(): Promise<EffectRow[]> {
+    return this.effects.filter((e) => e.state === 'FAILED').map((e) => ({ ...e }));
+  }
+
   async updateEffect(effectId: string, patch: Partial<EffectRow>): Promise<void> {
     const index = this.effects.findIndex((e) => e.effectId === effectId);
     if (index === -1) return;

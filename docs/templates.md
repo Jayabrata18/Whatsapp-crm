@@ -1,7 +1,7 @@
-# WhatsApp Templates — Phase 1
+# WhatsApp Templates — Phase 1 + Stage 1 delivery spine
 
 Create these in WhatsApp Manager → Account tools → Message templates.
-All three are **Utility** category. Language: **English** (code `en`) — this must match
+All six are **Utility** category. Language: **English** (code `en`) — this must match
 `TEMPLATE_LANG` in the environment.
 
 Variable order below matches `bodyParams` in the code exactly. Changing the order in
@@ -78,6 +78,70 @@ The link is valid for 24 hours. Prefer COD? Just ignore this, nothing changes.
 **Variables:** `{{1}}` customer first name · `{{2}}` payable amount · `{{3}}` COD fee waived
 
 **Sample values:** `Aarav`, `1849`, `50`
+
+---
+
+## 4. `order_delivered_invoice`
+
+**Category:** Utility
+**Header:** **Document** (media header) — the tax invoice PDF is attached here, uploaded to
+Meta first and sent as the header's media id
+
+**Body:**
+
+```
+Hi {{1}}, your URBNMYTH order {{2}} has been delivered.
+
+Your GST tax invoice is attached above — please save it for your records.
+
+Thanks for shopping with us!
+```
+
+**Variables:** `{{1}}` customer first name · `{{2}}` order number
+
+**Sample values for Meta's review form:** `Aarav`, `#1042`
+
+---
+
+## 5. `order_cancelled`
+
+**Category:** Utility
+**Buttons:** none
+
+**Body:**
+
+```
+Hi {{1}}, order {{2}} has been cancelled — {{3}}.
+
+If any amount was collected, it will be refunded to the original payment method.
+Reach out anytime if you have questions.
+```
+
+**Variables:** `{{1}}` customer first name · `{{2}}` order number · `{{3}}` reason phrase
+(the code fills this in — e.g. `cancelled at your request`, `returned to us undelivered`)
+
+**Sample values:** `Aarav`, `#1042`, `cancelled at your request`
+
+---
+
+## 6. `order_rating`
+
+**Category:** Utility
+**Buttons:** three Quick Reply buttons — `⭐ 1–2`, `⭐ 3`, `⭐ 4–5` (exact labels; the code
+extracts the digits from whichever button text Meta echoes back, so emoji/dash variants
+all resolve the same way)
+
+**Body:**
+
+```
+Hi {{1}}, how would you rate your recent URBNMYTH order {{2}}?
+
+Tap a button below to let us know.
+```
+
+**Variables:** `{{1}}` customer first name · `{{2}}` order number
+
+**Sample values:** `Aarav`, `#1042`
 
 ---
 

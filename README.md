@@ -24,11 +24,17 @@ npm run send:fake-order -- http://localhost:8080 919876543210
 ## Deploy
 
 ```bash
-PROJECT_ID=… SA_EMAIL=… SHOPIFY_STORE_DOMAIN=… ./deploy.sh
+PROJECT_ID=… SA_EMAIL=… SHOPIFY_STORE_DOMAIN=… INTERNAL_TASK_TOKEN=… ./deploy.sh
 ```
 
-The script prints the hub URL and the exact webhook paths to paste into Meta,
-Shopify, and Cashfree.
+The script prints the hub URL and the exact webhook paths to paste into Meta, Shopify,
+Cashfree, and Shadowfax, then registers the Cloud Scheduler jobs `/internal/*` needs
+(shipment sync every 4h, a daily rating sweep, and effect drain every 5 minutes).
+
+Cloud Run is deployed with `--max-instances=1`. That isn't a cost knob — the gapless
+invoice series and the in-process mutexes `CancellationService.approve` and
+`ReportingService.generate` rely on exactly one instance running at a time; a second
+instance would let two requests interleave past those guards.
 
 ## Endpoints
 
@@ -37,9 +43,20 @@ Shopify, and Cashfree.
 | `GET /health` | liveness |
 | `GET /webhook/meta` | Meta webhook verification |
 | `POST /webhook/meta` | inbound messages, button taps, delivery statuses |
-| `POST /webhook/shopify` | order creation |
+| `POST /webhook/shopify` | order creation, fulfillment intake |
 | `POST /webhook/cashfree` | payment link events |
-| `GET /api/orders` | JSON orders + metrics (token required) |
+| `POST /webhook/shadowfax` | shipment status updates |
+| `POST /internal/sync-shipments` | poll Shadowfax for open shipments (task token) |
+| `POST /internal/rating-sweep` | send due rating requests (task token) |
+| `POST /internal/drain-effects` | retry pending delivery/RTO effects (task token) |
+| `GET /internal/b2cs?month=YYYY-MM` | GSTR-1 B2CS CSV for a month (task token) |
+| `GET /api/orders` | JSON orders + metrics (dashboard token) |
+| `GET /api/delivery` | shipped/OFD/delivered funnel + in-transit RTOs (dashboard token) |
+| `GET /api/cancellations` | orders awaiting cancel review (dashboard token) |
+| `POST /api/cancellations/:orderNo/approve` | approve a queued cancellation (dashboard token) |
+| `GET /api/invoices` | invoice register + GST discrepancy flags (dashboard token) |
+| `GET /api/health-flags` | failed effects + unmapped courier statuses (dashboard token) |
+| `GET /api/b2cs?month=YYYY-MM` | same B2CS CSV as `/internal/b2cs`, behind the dashboard token instead — this is what the dashboard's GST section links to |
 | `GET /dashboard` | the dashboard page |
 
 ## Architecture

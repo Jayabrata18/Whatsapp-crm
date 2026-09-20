@@ -167,7 +167,12 @@ const app = createApp({
       reporting,
       taskToken: config.internalTaskToken,
     }),
-    createApiRouter({ store, dashboardToken: config.dashboardToken }),
+    createApiRouter({
+      store,
+      dashboardToken: config.dashboardToken,
+      cancellation,
+      reporting,
+    }),
     createDashboardRouter(),
   ],
 });

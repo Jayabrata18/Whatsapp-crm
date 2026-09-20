@@ -432,6 +432,12 @@ export class GoogleSheetStore implements SheetStore {
       .filter((row) => row.state === 'PENDING' && row.nextAttemptAt <= nowIso);
   }
 
+  async listFailedEffects(): Promise<EffectRow[]> {
+    return (await this.effectRowsWithIndex())
+      .map((entry) => entry.row)
+      .filter((row) => row.state === 'FAILED');
+  }
+
   async updateEffect(effectId: string, patch: Partial<EffectRow>): Promise<void> {
     const entry = (await this.effectRowsWithIndex()).find((e) => e.row.effectId === effectId);
     if (!entry) return;

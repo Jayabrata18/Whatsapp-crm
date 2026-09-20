@@ -166,6 +166,14 @@ describe('InMemorySheetStore', () => {
     expect((await store.listDueEffects('2026-09-15T11:00:00.000Z')).map((e) => e.effectId)).toEqual(['e1']);
   });
 
+  it('returns only FAILED effects', async () => {
+    const store = new InMemorySheetStore();
+    await store.appendEffect({ ...baseEffect, effectId: 'e1', state: 'FAILED' });
+    await store.appendEffect({ ...baseEffect, effectId: 'e2', state: 'PENDING' });
+    await store.appendEffect({ ...baseEffect, effectId: 'e3', state: 'DONE' });
+    expect((await store.listFailedEffects()).map((e) => e.effectId)).toEqual(['e1']);
+  });
+
   it('patches an effect without disturbing other fields', async () => {
     const store = new InMemorySheetStore();
     await store.appendEffect({ ...baseEffect, effectId: 'e1' });

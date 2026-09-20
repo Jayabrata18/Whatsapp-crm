@@ -133,6 +133,13 @@ export interface SheetStore {
   appendEffect(row: EffectRow): Promise<void>;
   /** PENDING effects whose next attempt is at or before `nowIso`. */
   listDueEffects(nowIso: string): Promise<EffectRow[]>;
+  /**
+   * Effects that have exhausted retries and been given up on. Nothing else in this
+   * store can list them — `listDueEffects` deliberately filters to PENDING — so the
+   * operator-facing Health panel reads this directly rather than reconstructing it
+   * from `listDueEffects` output, which would never include a FAILED row at all.
+   */
+  listFailedEffects(): Promise<EffectRow[]>;
   updateEffect(effectId: string, patch: Partial<EffectRow>): Promise<void>;
   /**
    * Writes A–J only, then the W–Y formulas. There is deliberately no method

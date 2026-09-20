@@ -410,6 +410,19 @@ describe('GoogleSheetStore effects', () => {
     expect(due.map((e) => e.effectId)).toEqual(['e1']);
   });
 
+  it('lists only FAILED effects', async () => {
+    const api = new FakeSheetsApi();
+    api.tabs.effects = [
+      ['header'],
+      effectRowToValues({ ...baseEffect, effectId: 'e1', state: 'FAILED' }),
+      effectRowToValues({ ...baseEffect, effectId: 'e2', state: 'PENDING' }),
+      effectRowToValues({ ...baseEffect, effectId: 'e3', state: 'DONE' }),
+    ];
+    const store = new GoogleSheetStore(api, 'sheet123');
+    const failed = await store.listFailedEffects();
+    expect(failed.map((e) => e.effectId)).toEqual(['e1']);
+  });
+
   it('writes only the columns named in the patch', async () => {
     const api = new FakeSheetsApi();
     api.tabs.effects = [['header'], effectRowToValues({ ...baseEffect, effectId: 'e1' })];
