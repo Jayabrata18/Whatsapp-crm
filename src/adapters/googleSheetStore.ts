@@ -25,6 +25,7 @@ import {
   type SheetStore,
 } from './sheets.js';
 import type { B2csRow } from '../core/b2cs.js';
+import { log } from '../logger.js';
 
 /**
  * The narrow slice of the Sheets API this adapter needs. Hand-rolled rather
@@ -472,7 +473,18 @@ export class GoogleSheetStore implements SheetStore {
       this.sheetId, LEDGER_APPEND_RANGE, [ledgerOrderValues(fields)],
     );
     const sheetRow = Number.parseInt(updatedRange.match(/!\D+(\d+)/)?.[1] ?? '0', 10);
-    if (sheetRow === 0) return;
+    if (sheetRow === 0) {
+      // Returning silently here left the row with no W–Y formulas and no log line:
+      // net revenue, EBITDA and PAT stay blank for this order forever, and the first
+      // anyone knows of it is a hole in the P&L months later. There is nothing to
+      // retry against — the A–J append already landed — so the only honest move is to
+      // say so loudly enough that the operator can paste the three formulas in.
+      log('error', 'ledger append returned an unparseable range — W–Y formulas not written', {
+        order_no: fields.orderNo,
+        updated_range: updatedRange,
+      });
+      return;
+    }
     await this.api.batchUpdateValues(this.sheetId, [
       {
         range: `ledger!W${sheetRow}:Y${sheetRow}`,

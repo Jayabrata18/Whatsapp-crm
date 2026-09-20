@@ -1,4 +1,5 @@
 import { canTransition, type FulfillmentStatus } from '../core/shipmentState.js';
+import { Mutex } from '../core/mutex.js';
 import type { SheetStore, ShipmentRow } from '../adapters/sheets.js';
 import type { ShipmentTracker } from '../adapters/shadowfax.js';
 import type { EffectService } from './effects.js';
@@ -51,6 +52,13 @@ function stampPatch(status: FulfillmentStatus, at: string): Partial<ShipmentRow>
 export class ShipmentSyncService {
   private readonly now: () => Date;
 
+  /**
+   * Shared across every call, not created per call — a per-call mutex locks nothing.
+   * See `applyShipmentStatus` for why this is the one function in the branch that
+   * genuinely needs it.
+   */
+  private readonly mutex = new Mutex();
+
   constructor(private readonly deps: ShipmentSyncDeps) {
     this.now = deps.now ?? (() => new Date());
   }
@@ -59,8 +67,31 @@ export class ShipmentSyncService {
    * The only place a fulfillment status changes. Callers hand it a status and
    * get back what happened; they never decide themselves whether to enqueue an
    * effect, so a webhook and the poller can never diverge on that decision.
+   *
+   * The whole body runs inside a `Mutex`, the same tool `InvoicingService`,
+   * `CancellationService.approve` and `ReportingService.generate` already use, because
+   * the read-then-write it performs spans four awaits — findShipmentByAwb,
+   * canTransition, upsertShipment, enqueue — and has two genuinely concurrent entry
+   * points by design: the `POST /webhook/shadowfax` route and the four-hourly poller.
+   * Cloud Run serves many concurrent requests per instance, so two overlapping
+   * same-status deliveries would both read OFD, both pass the transition guard, and
+   * both enqueue a `delivered` effect. Nothing downstream would catch it:
+   * `EffectService.enqueue` puts an ISO timestamp in `effectId`, so the two are
+   * distinct rows and both drain. The transition guard IS the branch's headline
+   * idempotency guarantee; this is what makes reading it and acting on it atomic.
+   * In-process is sufficient for the same reason it is everywhere else here —
+   * `--max-instances=1` (see deploy.sh).
    */
   async applyShipmentStatus(
+    awb: string,
+    status: FulfillmentStatus | null,
+    rawStatus: string,
+    at: string,
+  ): Promise<SyncResult> {
+    return this.mutex.run(() => this.applyShipmentStatusLocked(awb, status, rawStatus, at));
+  }
+
+  private async applyShipmentStatusLocked(
     awb: string,
     status: FulfillmentStatus | null,
     rawStatus: string,

@@ -155,6 +155,21 @@ export class RtoService {
     }
 
     const items = await shopify.getOrderLineItems(order.orderId);
+    if (items.length === 0) {
+      // `getOrderLineItems` filters out any node without `variant.inventoryItem.id`
+      // (a deleted product, a custom line item) and returns [] when the order can't be
+      // read at all. Calling adjustInventory([]) would succeed trivially and the stamp
+      // below would mark this shipment restocked forever, with the goods never returning
+      // to stock and nothing saying so. Return before the stamp: an unstamped shipment
+      // stays retryable, and this log is the operator's cue to restock by hand.
+      log('error', 'no restockable line items for an RTO return — nothing adjusted, not stamped', {
+        order_no: orderNo,
+        order_id: order.orderId,
+        awb: order.awb,
+      });
+      return;
+    }
+
     // Deterministic on purpose: derived only from the order number and AWB, which don't
     // change between attempts, so a retry of this exact restock reuses the identical key
     // and Shopify's @idempotent directive collapses it into a no-op instead of

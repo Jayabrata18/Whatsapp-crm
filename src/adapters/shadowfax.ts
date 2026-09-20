@@ -29,8 +29,15 @@ const STATUS_MAP: Record<string, FulfillmentStatus> = {
   RTO_INITIATED: 'RTO_INITIATED',
   RTO: 'RTO_INITIATED',
   RTO_IN_TRANSIT: 'RTO_INITIATED',
-  UNDELIVERED: 'RTO_INITIATED',
-  NDR: 'RTO_INITIATED',
+  // DELIBERATELY ABSENT: 'NDR' and 'UNDELIVERED'. An NDR is a *failed delivery
+  // attempt*, not a return — Shadowfax normally re-attempts. Mapping either to
+  // RTO_INITIATED cancelled the Shopify order, tagged it `rto` and WhatsApped the
+  // customer "returned to us undelivered" while the parcel was still out for a second
+  // attempt. Worse, when it then delivered, canTransition('RTO_INITIATED','DELIVERED')
+  // is false, so the delivery was refused outright: no mark-as-paid, no invoice, no
+  // ledger close — the customer has the goods, has paid COD, and the hub recorded
+  // nothing. Falling through to null is this file's own stated philosophy for a status
+  // it doesn't understand: warn, show it on the Health panel, let the operator decide.
   RTO_DELIVERED: 'RTO_RETURNED',
   RETURNED_TO_CLIENT: 'RTO_RETURNED',
   RTO_COMPLETED: 'RTO_RETURNED',
