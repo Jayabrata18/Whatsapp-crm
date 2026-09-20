@@ -12,6 +12,13 @@ npm test                  # everything is faked; no network needed
 npm run dev
 ```
 
+First run against a real Google Sheet? Create its tabs first — every reader
+addresses a hardcoded range and Sheets 400s on a tab that doesn't exist:
+
+```bash
+SHEET_ID=… npm run setup:sheets   # idempotent; existing tabs are left alone
+```
+
 Dashboard: `http://localhost:8080/dashboard?token=$DASHBOARD_TOKEN`
 
 ## Test without a real order
@@ -23,8 +30,13 @@ npm run send:fake-order -- http://localhost:8080 919876543210
 
 ## Deploy
 
+Go-live checklist, including every credential and the checks only a human can
+make: [`LAUNCH.md`](LAUNCH.md).
+
 ```bash
-PROJECT_ID=… SA_EMAIL=… SHOPIFY_STORE_DOMAIN=… INTERNAL_TASK_TOKEN=… ./deploy.sh
+PROJECT_ID=… SA_EMAIL=… SHOPIFY_STORE_DOMAIN=… SHOPIFY_LOCATION_ID=… \
+  SHADOWFAX_BASE_URL=… SELLER_LEGAL_NAME=… SELLER_ADDRESS=… SELLER_GSTIN=… \
+  DEFAULT_HSN=… JUDGEME_REVIEW_URL=… ./deploy.sh
 ```
 
 The script prints the hub URL and the exact webhook paths to paste into Meta, Shopify,
@@ -32,9 +44,11 @@ Cashfree, and Shadowfax, then registers the Cloud Scheduler jobs `/internal/*` n
 (shipment sync every 4h, a daily rating sweep, and effect drain every 5 minutes).
 
 Cloud Run is deployed with `--max-instances=1`. That isn't a cost knob — the gapless
-invoice series and the in-process mutexes `CancellationService.approve` and
-`ReportingService.generate` rely on exactly one instance running at a time; a second
-instance would let two requests interleave past those guards.
+invoice series and the in-process mutexes `CancellationService.approve`,
+`ReportingService.generate` and `ShipmentSyncService.applyShipmentStatus` rely on exactly
+one instance running at a time; a second instance would let two requests interleave past
+those guards. The cap is enforced per *revision*, so a traffic migration can briefly run
+two — deploy when the shop is quiet.
 
 ## Endpoints
 
