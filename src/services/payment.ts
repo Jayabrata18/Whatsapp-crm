@@ -67,7 +67,7 @@ export class PaymentService {
       return 'duplicate';
     }
 
-    await store.updateOrder(order.orderNo, {
+    await store.updateOrderFields(order.orderNo, {
       confirmStatus: 'PAID_EARLY',
       paidAt: this.now().toISOString(),
     });

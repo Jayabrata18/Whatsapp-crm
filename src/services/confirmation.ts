@@ -2,6 +2,7 @@ import { matchesCancel, matchesConfirm, type MetaEvent } from '../core/metaWebho
 import type { SheetStore } from '../adapters/sheets.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
 import type { PaymentLinkClient } from '../adapters/cashfree.js';
+import type { CancellationService } from './cancellation.js';
 import { log } from '../logger.js';
 
 export type ConfirmResult =
@@ -18,8 +19,10 @@ export interface ConfirmationDeps {
   store: SheetStore;
   whatsapp: WhatsAppClient;
   payments: PaymentLinkClient;
+  cancellation: Pick<CancellationService, 'queueForReview'>;
   templateLang: string;
   linkExpiryHours: number;
+  payEarlyEnabled: boolean;
   now?: () => Date;
 }
 
@@ -82,15 +85,25 @@ export class ConfirmationService {
     });
 
     if (isCancel) {
-      await store.updateOrder(order.orderNo, { confirmStatus: 'CANCELLED' });
-      log('info', 'order cancelled by customer', { order_no: order.orderNo });
+      // Queued for operator review, not cancelled outright: the button reply only
+      // marks the order and stops here — no Shopify call, no customer message —
+      // until an operator approves it via `CancellationService.approve`.
+      await this.deps.cancellation.queueForReview(order.orderNo, 'CUSTOMER_REQUEST');
+      log('info', 'order cancellation queued for review', { order_no: order.orderNo });
       return 'cancelled';
     }
 
-    await store.updateOrder(order.orderNo, {
+    await store.updateOrderFields(order.orderNo, {
       confirmStatus: 'CONFIRMED',
       confirmedAt: timestamp,
     });
+
+    if (!this.deps.payEarlyEnabled) {
+      log('info', 'early payment disabled, skipping payment link', {
+        order_no: order.orderNo,
+      });
+      return 'confirmed';
+    }
 
     // The amount comes from the row written at intake, never recomputed here:
     // the customer was quoted that number in the confirmation message, and the
@@ -105,7 +118,7 @@ export class ConfirmationService {
       expiryHours: this.deps.linkExpiryHours,
     });
 
-    await store.updateOrder(order.orderNo, { paymentLink: link.linkUrl });
+    await store.updateOrderFields(order.orderNo, { paymentLink: link.linkUrl });
 
     const { wamid } = await this.deps.whatsapp.sendTemplate({
       to: order.phone,

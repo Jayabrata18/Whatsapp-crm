@@ -1,5 +1,7 @@
 import { computePricing } from '../core/incentive.js';
 import { parseShopifyOrder } from '../core/shopifyOrder.js';
+import { computeGst, round2, type GstRates } from '../core/gst.js';
+import { stateCodeFor } from '../core/placeOfSupply.js';
 import type { OrderRow, SheetStore } from '../adapters/sheets.js';
 import type { WhatsAppClient } from '../adapters/whatsapp.js';
 import { log } from '../logger.js';
@@ -12,8 +14,13 @@ export interface OrderIntakeDeps {
   codFeeInr: number;
   codGatewayNames: string[];
   templateLang: string;
+  rates: GstRates;
+  corporateTaxPct: number;
   now?: () => Date;
 }
+
+/** A gap under this is per-line rounding drift, not a real disagreement. */
+const GST_TOLERANCE_INR = 1;
 
 export const TEMPLATE_COD = 'order_confirm_cod';
 export const TEMPLATE_PREPAID = 'order_confirm_prepaid';
@@ -33,7 +40,8 @@ export class OrderIntakeService {
    * a customer is not.
    */
   async handle(payload: unknown): Promise<IntakeResult> {
-    const { store, whatsapp, codFeeInr, codGatewayNames, templateLang } = this.deps;
+    const { store, whatsapp, codFeeInr, codGatewayNames, templateLang, rates, corporateTaxPct } =
+      this.deps;
 
     const parsed = parseShopifyOrder(payload, codGatewayNames);
 
@@ -62,8 +70,50 @@ export class OrderIntakeService {
       createdAt: timestamp,
       confirmedAt: '',
       paidAt: '',
+      fulfillmentStatus: 'NEW',
+      awb: '',
+      cancelStatus: 'NONE',
+      cancelReason: '',
+      invoiceNo: '',
+      rating: '',
+      gstDiscrepancy: 0,
+      // Frozen here, not re-derived at invoicing time: a tax invoice must reflect what the
+      // customer was actually charged at order time, and delivery can be days later.
+      linesJson: JSON.stringify(parsed.lines),
     };
     await store.appendOrder(row);
+
+    const posCode = stateCodeFor(parsed.provinceCode) ?? '';
+    await store.appendLedgerOrder(
+      {
+        orderNo: parsed.orderNo,
+        orderDate: timestamp.slice(0, 10),
+        pincode: parsed.pincode,
+        state: parsed.provinceName,
+        posCode,
+        skus: parsed.itemsSummary,
+        itemAmount: parsed.itemAmount,
+        shippingCharged: parsed.shippingCharged,
+        grossAmount: parsed.amount,
+        isCod: parsed.isCod,
+      },
+      corporateTaxPct,
+    );
+
+    // The operator chose the slab rule over Shopify's tax_lines, so the invoice will
+    // always follow the slab rule. This check exists so a misconfigured Shopify tax
+    // setting surfaces as a visible flag instead of an invoice that silently disagrees
+    // with what the customer was charged. See spec §5.4.
+    const breakdown = computeGst(parsed.lines, parsed.shippingCharged, parsed.amount, rates);
+    const gap = round2(Math.abs(breakdown.taxTotal - parsed.shopifyTaxTotal));
+    const discrepancy = parsed.shopifyTaxTotal > 0 && gap >= GST_TOLERANCE_INR ? gap : 0;
+
+    if (discrepancy > 0) {
+      log('warn', 'computed GST disagrees with Shopify tax_lines', {
+        order_no: parsed.orderNo, computed: breakdown.taxTotal, shopify: parsed.shopifyTaxTotal,
+      });
+      await store.updateOrderFields(parsed.orderNo, { gstDiscrepancy: discrepancy });
+    }
 
     if (!hasPhone) {
       log('warn', 'order has no usable phone, no message sent', { order_no: parsed.orderNo });

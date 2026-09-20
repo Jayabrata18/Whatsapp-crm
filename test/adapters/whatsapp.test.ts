@@ -8,6 +8,10 @@ function okResponse(wamid = 'wamid.XYZ') {
   });
 }
 
+function okJson(v: unknown) {
+  return new Response(JSON.stringify(v), { status: 200 });
+}
+
 describe('GraphWhatsAppClient', () => {
   it('posts a template to the right URL with a bearer token', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse());
@@ -134,5 +138,62 @@ describe('GraphWhatsAppClient', () => {
     await expect(
       client.sendTemplate({ to: '9', template: 't', languageCode: 'en', bodyParams: [] }),
     ).rejects.toThrow(/no message id/);
+  });
+
+  it('uploads media as multipart and returns the id', async () => {
+    let captured: RequestInit | undefined;
+    const client = new GraphWhatsAppClient({
+      accessToken: 't',
+      phoneNumberId: '1',
+      fetchImpl: async (_u, init) => {
+        captured = init as RequestInit;
+        return okJson({ id: 'media-42' });
+      },
+    });
+
+    const { mediaId } = await client.uploadMedia({
+      bytes: Buffer.from('%PDF-1.4'),
+      filename: 'inv.pdf',
+      mimeType: 'application/pdf',
+    });
+
+    expect(mediaId).toBe('media-42');
+    expect(captured?.body).toBeInstanceOf(FormData);
+  });
+
+  it('attaches a document header to a template', async () => {
+    let body: any;
+    const client = new GraphWhatsAppClient({
+      accessToken: 't',
+      phoneNumberId: '1',
+      fetchImpl: async (_u, init) => {
+        body = JSON.parse(String((init as RequestInit).body));
+        return okJson({ messages: [{ id: 'wamid.1' }] });
+      },
+    });
+
+    await client.sendTemplate({
+      to: '919876543210',
+      template: 'order_delivered_invoice',
+      languageCode: 'en',
+      bodyParams: ['Aarav', '#1042'],
+      documentHeaderMediaId: 'media-42',
+    });
+
+    expect(body.template.components[0]).toEqual({
+      type: 'header',
+      parameters: [{ type: 'document', document: { id: 'media-42', filename: 'invoice.pdf' } }],
+    });
+  });
+
+  it('throws when the upload response carries no id', async () => {
+    const client = new GraphWhatsAppClient({
+      accessToken: 't',
+      phoneNumberId: '1',
+      fetchImpl: async () => okJson({}),
+    });
+    await expect(
+      client.uploadMedia({ bytes: Buffer.alloc(1), filename: 'a.pdf', mimeType: 'application/pdf' }),
+    ).rejects.toThrow(/no media id/i);
   });
 });

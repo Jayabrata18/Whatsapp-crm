@@ -49,6 +49,14 @@ describe('POST /webhook/cashfree', () => {
       createdAt: '2026-08-16T10:00:00.000Z',
       confirmedAt: '2026-08-16T12:00:00.000Z',
       paidAt: '',
+      fulfillmentStatus: 'NEW',
+      awb: '',
+      cancelStatus: 'NONE',
+      cancelReason: '',
+      invoiceNo: '',
+      rating: '',
+      gstDiscrepancy: 0,
+      linesJson: '',
     });
   });
   afterEach(() => {

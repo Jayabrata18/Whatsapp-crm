@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseShopifyOrder } from '../../src/core/shopifyOrder.js';
+import { parseShopifyFulfillment, parseShopifyOrder } from '../../src/core/shopifyOrder.js';
 import { shopifyOrderPayload } from '../fixtures/shopifyOrder.js';
 
 const COD_NAMES = ['cash on delivery', 'cod'];
@@ -15,6 +15,16 @@ describe('parseShopifyOrder', () => {
       amount: 1899,
       isCod: true,
       itemsSummary: 'Oversized Tee — Black x2, Cargo Pants — Olive x1',
+      pincode: '700001',
+      provinceCode: 'WB',
+      provinceName: 'West Bengal',
+      shippingCharged: 0,
+      itemAmount: 1899,
+      lines: [
+        { inclUnitPrice: 600, quantity: 2 },
+        { inclUnitPrice: 699, quantity: 1 },
+      ],
+      shopifyTaxTotal: 0,
     });
   });
 
@@ -99,5 +109,36 @@ describe('parseShopifyOrder', () => {
 
   it('throws when the payload has no name', () => {
     expect(() => parseShopifyOrder({ id: 1 }, COD_NAMES)).toThrow(/name/);
+  });
+});
+
+describe('parseShopifyFulfillment', () => {
+  it('reads order_id, tracking_number and tracking_company', () => {
+    expect(
+      parseShopifyFulfillment({
+        order_id: 5544332211,
+        tracking_number: 'SF123',
+        tracking_company: 'Shadowfax',
+      }),
+    ).toEqual({ orderId: '5544332211', awb: 'SF123', courier: 'Shadowfax' });
+  });
+
+  it('falls back to the first entry of tracking_numbers when tracking_number is blank', () => {
+    const parsed = parseShopifyFulfillment({
+      order_id: 5544332211,
+      tracking_number: null,
+      tracking_numbers: ['SF999'],
+    });
+    expect(parsed.awb).toBe('SF999');
+  });
+
+  it('returns a null awb when no tracking number is present yet', () => {
+    const parsed = parseShopifyFulfillment({ order_id: 5544332211 });
+    expect(parsed.awb).toBeNull();
+    expect(parsed.courier).toBe('');
+  });
+
+  it('throws when the payload has no order_id', () => {
+    expect(() => parseShopifyFulfillment({ tracking_number: 'SF1' })).toThrow(/order_id/);
   });
 });
