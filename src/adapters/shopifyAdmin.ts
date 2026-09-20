@@ -1,6 +1,14 @@
 import { log } from '../logger.js';
 
-const API_VERSION = '2025-01';
+/**
+ * OAuth scopes this adapter needs on the Admin API access token — a missing scope fails
+ * at runtime with an authorization error that looks nothing like a scope problem, so it's
+ * recorded here rather than only in the Partner Dashboard:
+ *   - `write_orders`, `read_orders` — orderCancel, orderMarkAsPaid, tagsAdd
+ *   - `write_inventory` — inventoryAdjustQuantities
+ *   - `read_products`, `read_inventory` — the order line-items query
+ */
+const API_VERSION = '2026-07';
 
 const TAGS_ADD = `
   mutation addTag($id: ID!, $tags: [String!]!) {
@@ -11,11 +19,10 @@ const TAGS_ADD = `
 `;
 
 const ORDER_CANCEL = `
-  mutation cancelOrder($orderId: ID!, $reason: OrderCancelReason!, $restock: Boolean!,
-                       $refund: Boolean!, $staffNote: String) {
-    orderCancel(orderId: $orderId, reason: $reason, restock: $restock,
-                refund: $refund, staffNote: $staffNote) {
-      userErrors { field message }
+  mutation cancelOrder($orderId: ID!, $notifyCustomer: Boolean, $refundMethod: OrderCancelRefundMethodInput!, $restock: Boolean!, $reason: OrderCancelReason!, $staffNote: String) {
+    orderCancel(orderId: $orderId, notifyCustomer: $notifyCustomer, refundMethod: $refundMethod, restock: $restock, reason: $reason, staffNote: $staffNote) {
+      job { id done }
+      orderCancelUserErrors { field message code }
     }
   }
 `;
@@ -27,8 +34,10 @@ const ORDER_MARK_AS_PAID = `
 `;
 
 const INVENTORY_ADJUST = `
-  mutation adjust($input: InventoryAdjustQuantitiesInput!) {
-    inventoryAdjustQuantities(input: $input) { userErrors { field message } }
+  mutation adjust($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+    inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+      userErrors { field message }
+    }
   }
 `;
 
@@ -68,8 +77,15 @@ export interface ShopifyWriter extends OrderTagger {
    * other failure still throws.
    */
   markAsPaid(orderId: string): Promise<'marked' | 'already_paid'>;
+  /**
+   * `idempotencyKey` must be deterministic per retryable restock (derived from the order
+   * number and AWB, not a random or time-based value) — it's what lets Shopify's
+   * `@idempotent` directive collapse a retried call into a no-op instead of double-
+   * applying the delta. See `RtoService.onRtoReturned` for how the key is derived.
+   */
   adjustInventory(
     items: Array<{ inventoryItemId: string; locationId: string; delta: number }>,
+    idempotencyKey: string,
   ): Promise<void>;
   getOrderLineItems(
     orderId: string,
@@ -97,6 +113,13 @@ export class ShopifyAdminClient implements ShopifyWriter {
    * callers want the throw-on-any-userError behavior of `graphql()` below,
    * but `markAsPaid` needs to inspect them itself to tell an expected,
    * already-happened outcome from a genuine failure.
+   *
+   * Almost every mutation payload here names its error field `userErrors`.
+   * `orderCancel` is the one exception — the live schema exposes
+   * `orderCancelUserErrors` instead (plain `userErrors` still resolves but
+   * is deprecated), so that one mutation name is special-cased below rather
+   * than building a general field-name-discovery mechanism for a field that
+   * varies in exactly one place.
    */
   private async request<T>(
     query: string,
@@ -120,7 +143,11 @@ export class ShopifyAdminClient implements ShopifyWriter {
     }
 
     const parsed = (await res.json()) as {
-      data?: Record<string, { userErrors?: Array<{ message?: string }> } | undefined>;
+      data?: Record<
+        string,
+        | { userErrors?: Array<{ message?: string }>; orderCancelUserErrors?: Array<{ message?: string }> }
+        | undefined
+      >;
       errors?: Array<{ message?: string }>;
     };
 
@@ -131,7 +158,11 @@ export class ShopifyAdminClient implements ShopifyWriter {
     }
 
     const mutationResult = parsed.data?.[mutationName];
-    return { data: parsed.data as T, userErrors: mutationResult?.userErrors ?? [] };
+    const userErrors =
+      mutationName === 'orderCancel'
+        ? mutationResult?.orderCancelUserErrors ?? []
+        : mutationResult?.userErrors ?? [];
+    return { data: parsed.data as T, userErrors };
   }
 
   /** `request()`, but throws on any `userErrors` too — what every mutation but `markAsPaid` wants. */
@@ -160,7 +191,9 @@ export class ShopifyAdminClient implements ShopifyWriter {
     orderId: string,
     opts: { reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean },
   ): Promise<'cancelled' | 'already_cancelled'> {
-    const { userErrors } = await this.request(
+    const { data, userErrors } = await this.request<{
+      orderCancel?: { job?: { id: string; done: boolean } | null };
+    }>(
       ORDER_CANCEL,
       {
         orderId: `gid://shopify/Order/${orderId}`,
@@ -168,33 +201,54 @@ export class ShopifyAdminClient implements ShopifyWriter {
         restock: opts.restock,
         // Refunds are a money decision and stay manual; this call never
         // issues one, regardless of why the order was cancelled.
-        refund: false,
+        refundMethod: { originalPaymentMethodsRefund: false },
         staffNote: opts.note,
       },
       'orderCancel',
     );
 
-    if (userErrors.length === 0) return 'cancelled';
+    if (userErrors.length === 0) {
+      // orderCancel is asynchronous: a clean response means Shopify *accepted* the
+      // cancel job, not that it *completed*. Log the job id so a cancel that fails
+      // later, inside that job, is still traceable back to this call — see the Task 25
+      // brief's "known residual" note: this needs human verification against the real
+      // store before launch, since nothing here polls the job to completion.
+      log('info', 'Shopify orderCancel accepted, job queued', {
+        order_id: orderId,
+        job_id: data.orderCancel?.job?.id,
+      });
+      return 'cancelled';
+    }
 
     // Shopify rejects a cancel against an order that's already cancelled — expected on
     // a retry that lands after a prior attempt's cancel already succeeded, and no second
     // cancellation happens, so this is a no-op to treat as success.
     //
     // The exact wording below ('already cancelled') is NOT independently confirmed
-    // against Shopify's live response at our pinned API version (2025-01) — it's our
-    // best guess at the real phrase. Deliberately kept to one narrow phrase rather than
-    // broadened (e.g. matching on "already" + "cancel" as two independent tokens):
-    // `orderCancel` also rejects a cancel for three other, unrelated preconditions
-    // (a pending payment authorization, an active return in progress, an outstanding
-    // fulfillment that can't be cancelled), and at least one of those could plausibly
-    // phrase its own message with both "already" and "cancel" in it — e.g. "a refund is
-    // already in progress and the order cannot be cancelled". A false match on one of
-    // those would report `'already_cancelled'` on a cancel that never happened, on an
-    // operation Shopify documents as irreversible — a silent no-op, which is worse than
-    // this failing loudly. If this string turns out to be wrong, that failure is loud by
-    // design: it throws below with the exact message logged, so correcting the matcher
-    // is a one-line change with no guesswork. Do not "helpfully" broaden this again
-    // without confirming the real wording against a live response first.
+    // against Shopify's live response — it's our best guess at the real phrase.
+    // Deliberately kept to one narrow phrase rather than broadened (e.g. matching on
+    // "already" + "cancel" as two independent tokens): `orderCancel` also rejects a
+    // cancel for three other, unrelated preconditions (a pending payment authorization,
+    // an active return in progress, an outstanding fulfillment that can't be cancelled),
+    // and at least one of those could plausibly phrase its own message with both
+    // "already" and "cancel" in it — e.g. "a refund is already in progress and the
+    // order cannot be cancelled". A false match on one of those would report
+    // `'already_cancelled'` on a cancel that never happened, on an operation Shopify
+    // documents as irreversible — a silent no-op, which is worse than this failing
+    // loudly. If this string turns out to be wrong, that failure is loud by design: it
+    // throws below with the exact message logged, so correcting the matcher is a
+    // one-line change with no guesswork. Do not "helpfully" broaden this again without
+    // confirming the real wording against a live response first.
+    //
+    // This was also considered and rejected as a code match instead of a message match:
+    // the full `OrderCancelUserErrorCode` enum, read from the live 2026-07 schema, is
+    // `NO_REFUND_PERMISSION`, `NO_REFUND_TO_STORE_CREDIT_PERMISSION`,
+    // `STORE_CREDIT_REFUND_EXPIRATION_IN_PAST`, `STORE_CREDIT_REFUND_MISSING_CUSTOMER`,
+    // `STORE_CREDIT_REFUND_B2B_NOT_SUPPORTED`, `NOT_FOUND`, `INVALID`, `INTERNAL_ERROR` —
+    // there is no already-cancelled member. The only candidate is `INVALID`, which is
+    // also what a genuinely invalid cancel returns; matching on it would swallow real
+    // failures into the same silent no-op this comment already rules out for message
+    // matching. No code-based rewrite is possible without Shopify adding one.
     const allAlreadyCancelled = userErrors.every((e) =>
       (e.message ?? '').toLowerCase().includes('already cancelled'),
     );
@@ -229,6 +283,7 @@ export class ShopifyAdminClient implements ShopifyWriter {
 
   async adjustInventory(
     items: Array<{ inventoryItemId: string; locationId: string; delta: number }>,
+    idempotencyKey: string,
   ): Promise<void> {
     await this.graphql(
       INVENTORY_ADJUST,
@@ -242,6 +297,7 @@ export class ShopifyAdminClient implements ShopifyWriter {
             delta: item.delta,
           })),
         },
+        idempotencyKey,
       },
       'inventoryAdjustQuantities',
     );

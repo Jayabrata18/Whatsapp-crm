@@ -23,7 +23,7 @@ describe('ShopifyAdminClient', () => {
     }).addTag('55443', 'paid-early');
 
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe('https://urbnmyth.myshopify.com/admin/api/2025-01/graphql.json');
+    expect(url).toBe('https://urbnmyth.myshopify.com/admin/api/2026-07/graphql.json');
     expect(init.headers['X-Shopify-Access-Token']).toBe('shpat_x');
   });
 
@@ -124,7 +124,7 @@ describe('ShopifyAdminClient', () => {
       storeDomain: 'x',
       adminToken: 't',
       fetchImpl: async () =>
-        okJson({ data: { orderCancel: { userErrors: [{ message: 'Order not found' }] } } }),
+        okJson({ data: { orderCancel: { orderCancelUserErrors: [{ message: 'Order not found' }] } } }),
     });
     await expect(
       client.cancelOrder('99', { reason: 'OTHER', note: 'n', restock: false }),
@@ -139,7 +139,7 @@ describe('ShopifyAdminClient', () => {
         okJson({
           data: {
             orderCancel: {
-              userErrors: [{ field: ['id'], message: 'Order is already cancelled.' }],
+              orderCancelUserErrors: [{ field: ['id'], message: 'Order is already cancelled.' }],
             },
           },
         }),
@@ -160,7 +160,7 @@ describe('ShopifyAdminClient', () => {
         okJson({
           data: {
             orderCancel: {
-              userErrors: [
+              orderCancelUserErrors: [
                 { message: 'Order is already cancelled.' },
                 { message: 'Something else went wrong' },
               ],
@@ -240,13 +240,17 @@ describe('ShopifyAdminClient', () => {
       },
     });
 
-    await client.adjustInventory([
-      { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
-    ]);
+    await client.adjustInventory(
+      [
+        { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
+      ],
+      'rto-restock:#1042:SF000000001',
+    );
 
     expect(body.variables.input.changes).toEqual([
       { inventoryItemId: 'gid://shopify/InventoryItem/1', locationId: 'gid://shopify/Location/9', delta: 2 },
     ]);
+    expect(body.variables.idempotencyKey).toBe('rto-restock:#1042:SF000000001');
   });
 
   it('returns line items keyed by inventory item id, preferring currentQuantity over quantity', async () => {

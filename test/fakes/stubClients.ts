@@ -79,6 +79,7 @@ export class StubShopifyWriter implements ShopifyWriter {
   cancels: Array<{ orderId: string; reason: 'OTHER' | 'CUSTOMER'; note: string; restock: boolean }> = [];
   tags: Array<{ orderId: string; tag: string }> = [];
   inventoryAdjustments: Array<Array<{ inventoryItemId: string; locationId: string; delta: number }>> = [];
+  inventoryIdempotencyKeys: string[] = [];
   lineItems: Array<{ inventoryItemId: string; quantity: number }> = [];
   failMarkAsPaidWith: Error | null = null;
   failAdjustWith: Error | null = null;
@@ -111,9 +112,11 @@ export class StubShopifyWriter implements ShopifyWriter {
 
   async adjustInventory(
     items: Array<{ inventoryItemId: string; locationId: string; delta: number }>,
+    idempotencyKey: string,
   ): Promise<void> {
     if (this.failAdjustWith) throw this.failAdjustWith;
     this.inventoryAdjustments.push(items);
+    this.inventoryIdempotencyKeys.push(idempotencyKey);
   }
 
   async getOrderLineItems(

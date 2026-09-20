@@ -118,21 +118,23 @@ export class RtoService {
    * duplicate effect enqueue, etc.) — once stamped, this returns without calling
    * `adjustInventory` again.
    *
-   * KNOWN GAP, deliberately not fixed here: this stamp does **not** protect against a
-   * failure *inside* a single `adjustInventory` call. `ShopifyWriter.adjustInventory`
+   * GAP THIS CLOSES (was open, now fixed by Task 25): this stamp does **not** protect
+   * against a failure *inside* a single `adjustInventory` call. `ShopifyWriter.adjustInventory`
    * takes one batch of changes and returns `Promise<void>` — it throws on any
    * `userErrors`, but reports no per-item outcome, so if Shopify partially applies some
    * changes before failing validation on others, there is no way for this service to
-   * tell which variants already landed. A retry after that failure re-reads the same
-   * line items and re-submits the full batch, double-crediting whichever variants
-   * succeeded on the failed attempt. The real fix is Shopify's `@idempotent(key:)`
-   * directive on `inventoryAdjustQuantities`, optional from API version 2026-01 and
-   * required from 2026-04 — this adapter is pinned to 2025-01
-   * (`shopifyAdmin.ts`'s `API_VERSION`), and that version bump is tracked as its own
-   * task rather than folded in here, since no test in this repo (all fetch-faked) could
-   * catch a GraphQL shape regression from bumping it. Accepted deliberately: the failure
-   * needs a crash mid-mutation, and the resulting error is over-restock — visible in a
-   * stock count and correctable by hand — not overselling, which is customer-facing.
+   * tell which variants already landed. A retry after that failure would re-read the
+   * same line items and re-submit the full batch, double-crediting whichever variants
+   * succeeded on the failed attempt. `adjustInventory` now takes a second
+   * `idempotencyKey` argument, threaded through to `inventoryAdjustQuantities`'s
+   * `@idempotent(key:)` directive, which Shopify guarantees collapses a retried call
+   * with the same key into a no-op rather than reapplying it. The key below is derived
+   * deterministically from the order number and AWB — not a timestamp, a random UUID, or
+   * an attempt counter — specifically so a retry of this same restock reuses the
+   * identical key and Shopify recognises it as the same operation. This stamp
+   * (`rtoRestockedAt`) still guards the *outer* whole-handler retry (skips calling
+   * `adjustInventory` again at all); `@idempotent` guards the *inner* window where a
+   * call was made but its outcome is unknown. Complementary, not redundant.
    */
   async onRtoReturned(orderNo: string): Promise<void> {
     const { store, shopify, locationId } = this.deps;
@@ -153,8 +155,15 @@ export class RtoService {
     }
 
     const items = await shopify.getOrderLineItems(order.orderId);
+    // Deterministic on purpose: derived only from the order number and AWB, which don't
+    // change between attempts, so a retry of this exact restock reuses the identical key
+    // and Shopify's @idempotent directive collapses it into a no-op instead of
+    // double-applying the delta. No Date.now(), no crypto.randomUUID(), no attempt
+    // counter — any of those would produce a fresh key each retry and defeat the point.
+    const idempotencyKey = `rto-restock:${order.orderNo}:${order.awb}`;
     await shopify.adjustInventory(
       items.map((item) => ({ inventoryItemId: item.inventoryItemId, locationId, delta: item.quantity })),
+      idempotencyKey,
     );
 
     if (shipment) {
