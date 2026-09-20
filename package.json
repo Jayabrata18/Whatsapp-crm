@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "setup:sheets": "tsx scripts/setup-sheets.ts",
     "send:hello": "tsx scripts/send-hello.ts",
     "send:fake-order": "tsx scripts/fake-order.ts"
   },
