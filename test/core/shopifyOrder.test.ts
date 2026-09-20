@@ -98,9 +98,12 @@ describe('parseShopifyOrder', () => {
     expect(summary.endsWith('…')).toBe(true);
   });
 
-  it('rounds the total to whole rupees', () => {
+  it('keeps the paise on the total, since the invoice must match it exactly', () => {
+    // Was `toBe(1900)` while parsing used Math.round. `amount` is the figure computeGst
+    // reconciles the invoice to, and the exit criterion is a match to the paisa — rounding
+    // to whole rupees invented a ₹0.40 round-off on an order like this one.
     const payload = shopifyOrderPayload({ total_price: '1899.60' });
-    expect(parseShopifyOrder(payload, COD_NAMES).amount).toBe(1900);
+    expect(parseShopifyOrder(payload, COD_NAMES).amount).toBe(1899.6);
   });
 
   it('throws when the payload has no id', () => {

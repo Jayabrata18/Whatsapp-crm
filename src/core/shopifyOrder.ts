@@ -1,5 +1,6 @@
 import { round2 } from './gst.js';
 import type { GstLine } from './gst.js';
+import { apportion } from './discount.js';
 import { normalizeIndianPhone } from './phone.js';
 
 export interface ParsedOrder {
@@ -29,19 +30,92 @@ interface RawAddress {
   province?: string | null;
 }
 
+/** One discount application's share of a line. Shopify reports the money two ways. */
+interface RawDiscountAllocation {
+  amount?: unknown;
+  amount_set?: { shop_money?: { amount?: unknown } | null } | null;
+}
+
+interface RawLineItem {
+  title?: string | null;
+  quantity?: number | null;
+  /** The PRE-discount unit price. Never the rate-determining figure on its own. */
+  price?: unknown;
+  total_discount?: unknown;
+  discount_allocations?: RawDiscountAllocation[] | null;
+}
+
 interface RawPayload {
   id?: unknown;
   name?: unknown;
   total_price?: unknown;
   subtotal_price?: unknown;
+  total_discounts?: unknown;
   financial_status?: unknown;
   payment_gateway_names?: unknown;
   customer?: { first_name?: string | null; phone?: string | null } | null;
   shipping_address?: RawAddress | null;
   billing_address?: RawAddress | null;
-  line_items?: Array<{ title?: string | null; quantity?: number | null; price?: unknown }> | null;
+  line_items?: RawLineItem[] | null;
   total_shipping_price_set?: { shop_money?: { amount?: unknown } | null } | null;
   tax_lines?: Array<{ price?: unknown }> | null;
+}
+
+/** Shopify sends money as strings, sometimes as null, occasionally not at all. */
+function money(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function quantityOf(item: RawLineItem | null | undefined): number {
+  const parsed = Number(item?.quantity ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function allocationAmount(allocation: RawDiscountAllocation | null | undefined): number {
+  if (typeof allocation !== 'object' || allocation === null) return 0;
+  const direct = money(allocation.amount);
+  return direct > 0 ? direct : money(allocation.amount_set?.shop_money?.amount);
+}
+
+/** What Shopify says was discounted off this one line, or 0 when it says nothing. */
+function statedLineDiscount(item: RawLineItem | null | undefined): number {
+  const allocations = Array.isArray(item?.discount_allocations) ? item.discount_allocations : [];
+  const allocated = allocations.reduce((sum, one) => sum + allocationAmount(one), 0);
+  return allocated > 0 ? allocated : money(item?.total_discount);
+}
+
+/**
+ * The per-line inclusive price the customer ACTUALLY paid, which is the only figure
+ * the GST slab may be tested against.
+ *
+ * `line_items[].price` is the pre-discount unit price while `total_price` is
+ * post-discount, so building lines off `price` alone hands `computeGst` a line total
+ * that overshoots the consideration: the whole discount then lands in the invoice's
+ * Round Off line, the invoice declares an overstated taxable value, and `rollupB2cs`
+ * files that overstatement in GSTR-1. It also mis-slabs — a ₹2,600 piece discounted
+ * to ₹2,400 is a 5% supply, not an 18% one.
+ *
+ * Per-line `discount_allocations` are authoritative where Shopify provides them.
+ * Where it provides none for any line, the order-level `total_discounts` is the only
+ * record a discount happened and is spread across the lines pro rata. Never both —
+ * mixing them would count the same rupees twice.
+ */
+function buildLines(raw: RawPayload): GstLine[] {
+  const items = Array.isArray(raw.line_items) ? raw.line_items : [];
+  const gross = items.map((item) => money(item?.price) * quantityOf(item));
+  const stated = items.map(statedLineDiscount);
+  const discounts = stated.some((amount) => amount > 0)
+    ? stated
+    : apportion(gross, money(raw.total_discounts));
+
+  return items.map((item, index) => {
+    const quantity = quantityOf(item);
+    if (quantity === 0) return { inclUnitPrice: 0, quantity: 0 };
+    const lineGross = gross[index] ?? 0;
+    const net = Math.max(0, lineGross - Math.min(discounts[index] ?? 0, lineGross));
+    return { inclUnitPrice: round2(net / quantity), quantity };
+  });
 }
 
 function detectCod(payload: RawPayload, codGatewayNames: string[]): boolean {
@@ -85,12 +159,12 @@ export function parseShopifyOrder(payload: unknown, codGatewayNames: string[]): 
   const customerName =
     raw.customer?.first_name?.trim() || raw.shipping_address?.first_name?.trim() || 'there';
 
-  const amount = Math.round(Number(raw.total_price ?? 0));
+  // round2, not Math.round: this is the anchor computeGst reconciles the invoice to,
+  // and the exit criterion is that the invoice total matches the amount charged to the
+  // paisa. Rounding ₹1,899.50 to ₹1,900 here invents a ₹0.50 round-off out of nothing.
+  const amount = round2(Number(raw.total_price ?? 0));
 
-  const lines: GstLine[] = (Array.isArray(raw.line_items) ? raw.line_items : []).map((item) => ({
-    inclUnitPrice: Number(item?.price ?? 0),
-    quantity: Number(item?.quantity ?? 0),
-  }));
+  const lines = buildLines(raw);
 
   const shopifyTaxTotal = round2(
     (Array.isArray(raw.tax_lines) ? raw.tax_lines : [])
