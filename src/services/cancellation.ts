@@ -38,6 +38,19 @@ export class CancellationService {
       return;
     }
 
+    // Only an order that has not shipped can be cancelled this way. Past NEW the parcel
+    // is with the courier, and `approve` would cancel it in Shopify *with* `restock:
+    // true` — crediting stock that is physically in a van. A customer tapping "Cancel
+    // Order" on an already-shipped order is asking for the RTO path (refuse delivery),
+    // which the courier drives, not this one.
+    if (order.fulfillmentStatus !== 'NEW') {
+      log('warn', 'cancel request ignored for an order that has already shipped', {
+        order_no: orderNo,
+        fulfillment_status: order.fulfillmentStatus,
+      });
+      return;
+    }
+
     await store.updateOrderFields(orderNo, {
       confirmStatus: 'CANCELLED',
       cancelStatus: 'REVIEW_PENDING',

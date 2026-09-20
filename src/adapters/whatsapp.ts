@@ -14,6 +14,13 @@ export interface SendTemplateInput {
   urlButtonSuffix?: string;
   /** Media id of a previously uploaded document to use as the header. */
   documentHeaderMediaId?: string;
+  /**
+   * Filename WhatsApp shows for that document. This is what the customer sees in the
+   * chat and what lands in their phone's Downloads, so an invoice should carry its own
+   * number — `UM-26-27-0001.pdf`, not the same `invoice.pdf` for every order they ever
+   * receive. Falls back to `invoice.pdf` when a caller has no better name.
+   */
+  documentHeaderFilename?: string;
   /** Media id of a previously uploaded image to use as the header. */
   imageHeaderMediaId?: string;
 }
@@ -74,7 +81,13 @@ export class GraphWhatsAppClient implements WhatsAppClient {
       components.unshift({
         type: 'header',
         parameters: [
-          { type: 'document', document: { id: input.documentHeaderMediaId, filename: 'invoice.pdf' } },
+          {
+            type: 'document',
+            document: {
+              id: input.documentHeaderMediaId,
+              filename: input.documentHeaderFilename ?? 'invoice.pdf',
+            },
+          },
         ],
       });
     }

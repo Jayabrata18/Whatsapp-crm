@@ -199,6 +199,11 @@ export class ShopifyAdminClient implements ShopifyWriter {
         orderId: `gid://shopify/Order/${orderId}`,
         reason: opts.reason,
         restock: opts.restock,
+        // Declared in the mutation and interpolated into it, but never supplied — it
+        // resolved to null, leaving the behaviour to Shopify's default. The hub sends
+        // its own WhatsApp message for both cancel paths (RtoService.onRtoInitiated and
+        // CancellationService.approve), so a Shopify email would be a duplicate.
+        notifyCustomer: false,
         // Refunds are a money decision and stay manual; this call never
         // issues one, regardless of why the order was cancelled.
         refundMethod: { originalPaymentMethodsRefund: false },

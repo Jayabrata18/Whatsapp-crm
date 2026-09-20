@@ -28,6 +28,15 @@ export interface InvoicingDeps {
 
 export const TEMPLATE_DELIVERED = 'order_delivered_invoice';
 
+/**
+ * `UM/26-27/0001` -> `UM-26-27-0001.pdf`. One name for both the Meta upload and the
+ * template's document header, so the file the customer sees in the chat carries its own
+ * invoice number rather than the same `invoice.pdf` every other customer gets.
+ */
+export function invoicePdfFilename(invoiceNo: string): string {
+  return `${invoiceNo.replace(/\//g, '-')}.pdf`;
+}
+
 export class InvoicingService {
   private readonly mutex = new Mutex();
   private readonly now: () => Date;
@@ -93,7 +102,7 @@ export class InvoicingService {
     // no sequence number at all — the next call allocates the same one.
     const bytes = await this.deps.renderer.render(data);
     const { mediaId } = await this.deps.whatsapp.uploadMedia({
-      bytes, filename: `${invoiceNo.replace(/\//g, '-')}.pdf`, mimeType: 'application/pdf',
+      bytes, filename: invoicePdfFilename(invoiceNo), mimeType: 'application/pdf',
     });
 
     // One register row per rate. Shipping folds into the row for the rate it was
@@ -126,7 +135,7 @@ export class InvoicingService {
     // steps must not allocate a second number on retry — issueForOrder's entry check finds
     // this row on the next call and resumes from exactly here via `resume()`.
     await this.deps.store.updateOrderFields(orderNo, { invoiceNo });
-    await this.sendDeliveredMessage(orderNo, order, mediaId);
+    await this.sendDeliveredMessage(orderNo, order, mediaId, invoiceNo);
 
     return { invoiceNo };
   }
@@ -157,15 +166,21 @@ export class InvoicingService {
 
     // The PDF already exists on Meta from the original attempt; re-sending reuses that
     // mediaId rather than rendering and uploading a second copy.
-    await this.sendDeliveredMessage(orderNo, order, mediaId);
+    await this.sendDeliveredMessage(orderNo, order, mediaId, invoiceNo);
     return { invoiceNo };
   }
 
-  private async sendDeliveredMessage(orderNo: string, order: OrderRow, mediaId: string): Promise<void> {
+  private async sendDeliveredMessage(
+    orderNo: string,
+    order: OrderRow,
+    mediaId: string,
+    invoiceNo: string,
+  ): Promise<void> {
     const timestamp = this.now().toISOString();
     const { wamid } = await this.deps.whatsapp.sendTemplate({
       to: order.phone, template: TEMPLATE_DELIVERED, languageCode: this.deps.templateLang,
       bodyParams: [order.customerName, order.orderNo], documentHeaderMediaId: mediaId,
+      documentHeaderFilename: invoicePdfFilename(invoiceNo),
     });
     await this.deps.store.appendMessage({
       orderNo, template: TEMPLATE_DELIVERED, wamid, direction: 'out',

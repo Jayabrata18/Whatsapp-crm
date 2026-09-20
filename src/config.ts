@@ -38,6 +38,21 @@ const schema = z.object({
   RATING_DELAY_DAYS: z.coerce.number().int().positive().default(3),
   JUDGEME_REVIEW_URL: z.string().url(),
   INTERNAL_TASK_TOKEN: z.string().min(16),
+}).superRefine((env, ctx) => {
+  // The first two digits of a GSTIN ARE the state code. If the two disagree, every
+  // invoice prints one state's GSTIN while declaring supplies from another, and every
+  // intra/inter-state decision is taken against the wrong home state — a systematic
+  // filing error that produces no error message anywhere. Cheapest possible place to
+  // catch it is before the process finishes starting.
+  if (env.SELLER_GSTIN.slice(0, 2) !== env.SELLER_STATE_CODE) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SELLER_GSTIN'],
+      message:
+        `must begin with SELLER_STATE_CODE (${env.SELLER_STATE_CODE}), ` +
+        `but begins with ${env.SELLER_GSTIN.slice(0, 2)}`,
+    });
+  }
 });
 
 export interface Config {

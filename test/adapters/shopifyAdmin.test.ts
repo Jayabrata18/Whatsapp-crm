@@ -99,7 +99,10 @@ describe('ShopifyAdminClient', () => {
       adminToken: 't',
       fetchImpl: async (_url, init) => {
         body = JSON.parse(String((init as RequestInit).body));
-        return okJson({ data: { orderCancel: { userErrors: [] } } });
+        // orderCancelUserErrors, not userErrors: the live schema's field name, and what
+        // `request()` reads for this one mutation. Its three sibling fixtures below were
+        // already updated; this one was left behind.
+        return okJson({ data: { orderCancel: { orderCancelUserErrors: [] } } });
       },
     });
 
