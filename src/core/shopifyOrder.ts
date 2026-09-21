@@ -96,10 +96,61 @@ function allocationAmount(allocation: RawDiscountAllocation | null | undefined):
   return direct > 0 ? direct : money(allocation.amount_set?.shop_money?.amount);
 }
 
+function allocatedTotal(allocations: RawDiscountAllocation[] | null | undefined): number {
+  return (Array.isArray(allocations) ? allocations : []).reduce(
+    (sum, one) => sum + allocationAmount(one),
+    0,
+  );
+}
+
+/** What was charged for delivery, and the shipping discount already inside `total_discounts`. */
+interface ShippingMoney {
+  /** Net of any shipping discount — what the customer actually paid to be delivered. */
+  charged: number;
+  /** What a free-/reduced-shipping code took off. Never negative. */
+  discount: number;
+}
+
+/**
+ * `total_shipping_price_set` is documented as EXCLUDING discounts, so a FREESHIP code
+ * leaves it at the full ₹99 while `total_price` has already dropped by ₹99. Handing
+ * that figure to `computeGst` puts ₹99 of tax on a supply nobody was charged for and
+ * drives `roundOff` to −99, which `resolveInvoiceBasis` (correctly) refuses to issue.
+ *
+ * `shipping_lines[]` carries the netted figure: `discounted_price` where Shopify states
+ * it, else `price` less that line's own `discount_allocations`. Only when there are no
+ * shipping lines at all does the order-level set remain the best available record.
+ *
+ * The discount is returned alongside because `total_discounts` contains it too, and
+ * `buildLines` must not spread it over the goods after it has already been taken off
+ * shipping here — the same rupees twice would push `roundOff` positive by that amount.
+ */
+function resolveShipping(raw: RawPayload): ShippingMoney {
+  const shippingLines = Array.isArray(raw.shipping_lines) ? raw.shipping_lines : [];
+  if (shippingLines.length === 0) {
+    return { charged: round2(money(raw.total_shipping_price_set?.shop_money?.amount)), discount: 0 };
+  }
+
+  let gross = 0;
+  let net = 0;
+  for (const line of shippingLines) {
+    const price = money(line?.price);
+    const allocated = allocatedTotal(line?.discount_allocations);
+    const lineNet = statesMoney(line?.discounted_price)
+      ? money(line?.discounted_price)
+      : Math.max(0, price - Math.min(allocated, price));
+    gross += price;
+    net += lineNet;
+  }
+
+  // Clamped: a payload where the netted figure exceeds the gross one must not invent a
+  // negative discount and hand the goods lines a discount larger than the order's.
+  return { charged: round2(net), discount: Math.max(0, round2(gross - net)) };
+}
+
 /** What Shopify says was discounted off this one line, or 0 when it says nothing. */
 function statedLineDiscount(item: RawLineItem | null | undefined): number {
-  const allocations = Array.isArray(item?.discount_allocations) ? item.discount_allocations : [];
-  const allocated = allocations.reduce((sum, one) => sum + allocationAmount(one), 0);
+  const allocated = allocatedTotal(item?.discount_allocations);
   return allocated > 0 ? allocated : money(item?.total_discount);
 }
 
@@ -118,14 +169,20 @@ function statedLineDiscount(item: RawLineItem | null | undefined): number {
  * Where it provides none for any line, the order-level `total_discounts` is the only
  * record a discount happened and is spread across the lines pro rata. Never both —
  * mixing them would count the same rupees twice.
+ *
+ * `total_discounts` covers the whole order, shipping included, so `shippingDiscount`
+ * — already netted off `shippingCharged` by `resolveShipping` — is taken out before
+ * the remainder is spread over the goods. Apportioning the full figure here as well
+ * would subtract a free-shipping code twice and overstate the discount on the goods.
  */
-function buildLines(raw: RawPayload): GstLine[] {
+function buildLines(raw: RawPayload, shippingDiscount: number): GstLine[] {
   const items = Array.isArray(raw.line_items) ? raw.line_items : [];
   const gross = items.map((item) => money(item?.price) * quantityOf(item));
   const stated = items.map(statedLineDiscount);
+  const goodsDiscount = Math.max(0, round2(money(raw.total_discounts) - shippingDiscount));
   const discounts = stated.some((amount) => amount > 0)
     ? stated
-    : apportion(gross, money(raw.total_discounts));
+    : apportion(gross, goodsDiscount);
 
   return items.map((item, index) => {
     const quantity = quantityOf(item);
