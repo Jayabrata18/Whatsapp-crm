@@ -45,6 +45,13 @@ interface RawLineItem {
   discount_allocations?: RawDiscountAllocation[] | null;
 }
 
+/** One shipping rate on the order. `price` is PRE-discount; `discounted_price` is not. */
+interface RawShippingLine {
+  price?: unknown;
+  discounted_price?: unknown;
+  discount_allocations?: RawDiscountAllocation[] | null;
+}
+
 interface RawPayload {
   id?: unknown;
   name?: unknown;
@@ -57,6 +64,7 @@ interface RawPayload {
   shipping_address?: RawAddress | null;
   billing_address?: RawAddress | null;
   line_items?: RawLineItem[] | null;
+  shipping_lines?: RawShippingLine[] | null;
   total_shipping_price_set?: { shop_money?: { amount?: unknown } | null } | null;
   tax_lines?: Array<{ price?: unknown }> | null;
 }
@@ -65,6 +73,16 @@ interface RawPayload {
 function money(value: unknown): number {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
+ * Whether Shopify actually stated this money field. `money()` cannot tell a stated
+ * `"0.00"` from an absent field, and for `discounted_price` that difference decides
+ * whether shipping was given away free or simply not reported.
+ */
+function statesMoney(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return false;
+  return Number.isFinite(Number(value));
 }
 
 function quantityOf(item: RawLineItem | null | undefined): number {
